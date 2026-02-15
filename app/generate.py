@@ -214,9 +214,9 @@ async def generate_vendor_response(
             },
         )
         closure_reply = (
-            "Yeh negotiation toh khatam ho chuki hai, bhai. Phir milenge!"
+            "This negotiation is already done, brother. See you next time!"
             if current_stage == NegotiationStage.DEAL
-            else "Bhai, baat toh khatam ho gayi. Phir kabhi aana!"
+            else "Brother, the conversation is over. Come back another day!"
         )
         response = VendorResponse(
             reply_text=closure_reply,
@@ -243,7 +243,7 @@ async def generate_vendor_response(
             },
         )
         response = VendorResponse(
-            reply_text="Bahut der ho gayi bhai! Dukaan band karna hai. Phir aana!",
+            reply_text="It has been too long, brother! I need to close the shop. Come again!",
             happiness_score=max(session_state.get("happiness_score", 50) - 10, 0),
             negotiation_state=NegotiationStage.CLOSURE.value,
             vendor_mood="annoyed",
@@ -274,7 +274,6 @@ async def generate_vendor_response(
         turn_count=turn_count,
         object_grabbed=parsed_scene.object_grabbed,
         input_language=parsed_scene.input_language.value,
-        target_language=parsed_scene.target_language.value,
         wrap_up=turn_count >= WRAP_UP_TURN_THRESHOLD,
         graph_context=graph_context_block,
     )
@@ -324,6 +323,8 @@ async def generate_vendor_response(
             "duration_ms": llm_ms,
             "negotiation_state": ai_decision.negotiation_state.value,
             "happiness_score": ai_decision.happiness_score,
+            "counter_price": ai_decision.counter_price,
+            "offer_assessment": ai_decision.offer_assessment,
             "reasoning": ai_decision.internal_reasoning,
         },
     )
@@ -382,6 +383,10 @@ async def generate_vendor_response(
 
     session_state["happiness_score"] = response.happiness_score
     session_state["negotiation_state"] = response.negotiation_state
+
+    # Persist counter_price for price-direction validation on next turn (v6.0)
+    if ai_decision.counter_price is not None:
+        session_state["last_counter_price"] = ai_decision.counter_price
 
     try:
         await store.save_session(session_id, session_state)

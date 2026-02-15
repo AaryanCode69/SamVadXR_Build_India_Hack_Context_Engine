@@ -100,7 +100,6 @@ class TestBuildSystemPrompt:
             turn_count=5,
             object_grabbed="copper_bowl",
             input_language="hi-IN",
-            target_language="hi-IN",
         )
         assert "happiness_score: 75" in prompt
         assert "negotiation_state: HAGGLING" in prompt
@@ -250,7 +249,7 @@ class TestPromptVersion:
 def _valid_ai_response(**overrides: Any) -> str:
     """Build a valid AIDecision JSON string."""
     data = {
-        "reply_text": "Arey bhai, ye pure Banarasi silk hai!",
+        "reply_text": "Brother, this is pure Banarasi silk!",
         "happiness_score": 60,
         "negotiation_state": "HAGGLING",
         "vendor_mood": "enthusiastic",
@@ -276,7 +275,7 @@ class TestOpenAILLMServiceParsing:
         raw = _valid_ai_response()
         result = OpenAILLMService._parse_response(raw)
         assert isinstance(result, AIDecision)
-        assert result.reply_text == "Arey bhai, ye pure Banarasi silk hai!"
+        assert result.reply_text == "Brother, this is pure Banarasi silk!"
         assert result.happiness_score == 60
         assert result.negotiation_state == NegotiationStage.HAGGLING
         assert result.vendor_mood == VendorMood.ENTHUSIASTIC

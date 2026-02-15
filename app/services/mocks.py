@@ -78,56 +78,68 @@ class MockLLMService:
         # ── Keyword routing ───────────────────────────────
         if any(kw in speech for kw in ("namaste", "hello", "namaskar")):
             return AIDecision(
-                reply_text="Namaste ji! Aao aao, dekho kya kya hai humare paas!",
+                reply_text="Welcome, welcome! Come, come, see what all I have for you!",
                 happiness_score=55,
                 negotiation_state=NegotiationStage.GREETING,
                 vendor_mood=VendorMood.FRIENDLY,
                 internal_reasoning="[MOCK] User greeted → greeting response",
+                counter_price=None,
+                offer_assessment="none",
             )
 
         if any(kw in speech for kw in ("kitne", "price", "cost", "kidhar", "कितने")):
             return AIDecision(
-                reply_text="Arey bhai, ye toh sabse fresh hai! ₹60 kilo, special price!",
+                reply_text="Oh brother, this is the freshest you will find! 60 rupees per kilo, special price just for you!",
                 happiness_score=65,
                 negotiation_state=NegotiationStage.INQUIRY,
                 vendor_mood=VendorMood.FRIENDLY,
                 internal_reasoning="[MOCK] User asked price → inquiry response",
+                counter_price=60,
+                offer_assessment="none",
             )
 
         if any(kw in speech for kw in ("nahi", "no", "chhodo", "chalo", "bahut")):
             return AIDecision(
-                reply_text="Arey ruko ruko! Itna bhi nahi bolna tha, thoda aur suno!",
+                reply_text="Wait, wait! Don't say that, just listen a little more!",
                 happiness_score=35,
                 negotiation_state=NegotiationStage.WALKAWAY,
                 vendor_mood=VendorMood.ANNOYED,
                 internal_reasoning="[MOCK] User rejecting → walkaway response",
+                counter_price=None,
+                offer_assessment="none",
             )
 
         if any(kw in speech for kw in ("theek", "deal", "done", "pakka", "le lo")):
             return AIDecision(
-                reply_text="Bahut badhiya! Deal pakki! Aap bahut acche customer ho!",
+                reply_text="Wonderful! Deal is done! You are a very good customer!",
                 happiness_score=85,
                 negotiation_state=NegotiationStage.DEAL,
                 vendor_mood=VendorMood.ENTHUSIASTIC,
                 internal_reasoning="[MOCK] User agreed → deal response",
+                counter_price=55,
+                offer_assessment="excellent",
             )
 
         if not speech.strip():
             return AIDecision(
-                reply_text="Kuch bola kya? Arey bhai, yaha aao, dikhata hoon!",
+                reply_text="Did you say something? Come here brother, let me show you!",
                 happiness_score=50,
                 negotiation_state=NegotiationStage.GREETING,
                 vendor_mood=VendorMood.NEUTRAL,
                 internal_reasoning="[MOCK] Empty input → vendor prompts user",
+                counter_price=None,
+                offer_assessment="none",
             )
 
         # Default: neutral greeting response
         return AIDecision(
-            reply_text="Haan ji, bahut accha choice hai! Aur kuch dekhna hai?",
+            reply_text="Yes, yes, very good choice! Want to see anything else?",
             happiness_score=50,
             negotiation_state=NegotiationStage.GREETING,
             vendor_mood=VendorMood.NEUTRAL,
             internal_reasoning="[MOCK] Default → greeting response",
+            counter_price=None,
+            offer_assessment="none",
         )
 
 

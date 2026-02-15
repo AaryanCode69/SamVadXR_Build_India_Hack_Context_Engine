@@ -7,6 +7,8 @@ VendorResponse — validated output returned to Dev B as a plain dict.
 
 from __future__ import annotations
 
+from typing import Optional
+
 from pydantic import BaseModel, Field, field_validator
 
 from app.models.enums import (
@@ -23,12 +25,17 @@ class AIDecision(BaseModel):
     This is an INTERNAL model — never sent directly to Dev B.
     The state engine validates and clamps these values before they
     become a VendorResponse.
+
+    v6.0 additions: counter_price and offer_assessment are optional fields
+    that force the LLM to reason about pricing explicitly. They are used
+    internally by the state engine for validation but are NOT forwarded
+    to Dev B.
     """
 
     reply_text: str = Field(
         ...,
         min_length=1,
-        description="What the vendor NPC says (native-script string).",
+        description="What the vendor NPC says (always in English, phrased for easy translation to target language).",
     )
     happiness_score: int = Field(
         ...,
@@ -48,6 +55,25 @@ class AIDecision(BaseModel):
         default="",
         description="AI's reasoning for this decision (debug/logging only).",
     )
+    counter_price: Optional[int] = Field(
+        default=None,
+        ge=0,
+        description=(
+            "The price the vendor is quoting or counter-offering this turn. "
+            "None if no price is being discussed (e.g. GREETING stage). "
+            "Used internally for price-consistency validation."
+        ),
+    )
+    offer_assessment: Optional[str] = Field(
+        default=None,
+        description=(
+            "Vendor's assessment of the customer's offer: "
+            "'insult' (<25% of quoted), 'lowball' (25-40%), "
+            "'fair' (40-60%), 'good' (60-75%), 'excellent' (>75%), "
+            "or 'none' if no offer was made. Forces LLM to reason "
+            "about offer quality before responding."
+        ),
+    )
 
     # ── Validators ────────────────────────────────────────
 
@@ -58,6 +84,17 @@ class AIDecision(BaseModel):
         if isinstance(v, (int, float)):
             return max(MOOD_MIN, min(MOOD_MAX, int(v)))
         return v
+
+    @field_validator("offer_assessment", mode="before")
+    @classmethod
+    def validate_offer_assessment(cls, v: Optional[str]) -> Optional[str]:
+        """Validate offer_assessment is one of the allowed categories."""
+        if v is None:
+            return v
+        allowed = {"insult", "lowball", "fair", "good", "excellent", "none"}
+        if v.lower() not in allowed:
+            return "none"  # graceful fallback — don't crash on LLM quirks
+        return v.lower()
 
 
 class VendorResponse(BaseModel):
@@ -73,7 +110,7 @@ class VendorResponse(BaseModel):
     reply_text: str = Field(
         ...,
         min_length=1,
-        description="Vendor's spoken response (native-script string).",
+        description="Vendor's spoken response (always in English, phrased for easy translation to target language).",
     )
     happiness_score: int = Field(
         ...,

@@ -8,6 +8,7 @@ Public API:
     validate_transition(current, proposed, happiness_score) → (stage, warnings)
     validate_ai_decision(ai_decision, session_state, config) → ValidatedState
     derive_vendor_mood(happiness_score) → VendorMood
+    validate_price_consistency(ai_decision, session_state) → list[str]
 """
 
 from __future__ import annotations
@@ -28,6 +29,17 @@ from app.models.enums import (
 from app.models.response import AIDecision
 
 logger = logging.getLogger("samvadxr")
+
+# ── Offer assessment → minimum expected happiness drop ──
+# Used by validate_offer_happiness_consistency()
+_OFFER_MIN_DROPS: dict[str, int] = {
+    "insult": 10,     # Must drop at least 10 for insult offers
+    "lowball": 6,     # Must drop at least 6 for lowball offers
+    "fair": 0,        # Fair offers — drop is expected but not enforced
+    "good": 0,        # Good offers — no drop required
+    "excellent": 0,   # Excellent offers — no drop required
+    "none": 0,        # No offer made — no constraint
+}
 
 
 # ═══════════════════════════════════════════════════════════
@@ -185,6 +197,84 @@ def build_session_summary(
 
 
 # ═══════════════════════════════════════════════════════════
+#  Price & offer-happiness consistency validation (v6.0)
+# ═══════════════════════════════════════════════════════════
+
+
+def validate_offer_happiness_consistency(
+    ai_decision: AIDecision,
+    current_happiness: int,
+) -> tuple[int, list[str]]:
+    """Enforce that insulting/lowball offers actually cause happiness drops.
+
+    If the LLM assessed an offer as "insult" or "lowball" but didn't drop
+    happiness enough, we force a minimum drop. This prevents the vendor
+    from being too lenient on terrible offers.
+
+    Args:
+        ai_decision: The raw AI decision with offer_assessment.
+        current_happiness: The authoritative happiness before this turn.
+
+    Returns:
+        (adjusted_happiness, list_of_warnings)
+    """
+    warnings: list[str] = []
+    proposed_happiness = ai_decision.happiness_score
+    assessment = (ai_decision.offer_assessment or "none").lower()
+
+    min_drop = _OFFER_MIN_DROPS.get(assessment, 0)
+    if min_drop <= 0:
+        return proposed_happiness, warnings
+
+    actual_delta = current_happiness - proposed_happiness  # positive = drop
+
+    if actual_delta < min_drop:
+        # LLM was too lenient — enforce minimum drop
+        forced_happiness = max(MOOD_MIN, current_happiness - min_drop)
+        warnings.append(
+            f"Offer assessed as '{assessment}' but happiness only dropped "
+            f"{actual_delta} (min required: {min_drop}). "
+            f"Forcing happiness: {proposed_happiness} → {forced_happiness}"
+        )
+        return forced_happiness, warnings
+
+    return proposed_happiness, warnings
+
+
+def validate_price_direction(
+    ai_decision: AIDecision,
+    session_state: dict[str, Any],
+) -> list[str]:
+    """Warn if the vendor raised their price (which breaks negotiation realism).
+
+    Prices should only go DOWN during negotiation (vendor concedes),
+    never UP (unless re-entering from WALKAWAY, which is a special case).
+
+    This is a soft validation — we log warnings but don't force a change,
+    because the LLM might have a valid reason (e.g. switching items).
+    """
+    warnings: list[str] = []
+    counter_price = ai_decision.counter_price
+    last_price = session_state.get("last_counter_price")
+
+    if counter_price is None or last_price is None:
+        return warnings
+
+    current_stage = session_state.get("negotiation_state", "GREETING")
+    # Allow price reset after WALKAWAY → HAGGLING re-entry
+    if current_stage == "WALKAWAY":
+        return warnings
+
+    if counter_price > last_price:
+        warnings.append(
+            f"Vendor raised price from {last_price} to {counter_price}. "
+            f"Prices should only decrease during negotiation."
+        )
+
+    return warnings
+
+
+# ═══════════════════════════════════════════════════════════
 #  Full AI decision validation (5.5 — the main entry point)
 # ═══════════════════════════════════════════════════════════
 
@@ -202,9 +292,11 @@ def validate_ai_decision(
 
     Steps:
         1. Validate stage transition (legal + special rules).
-        2. Clamp happiness_score ±max_mood_delta from current.
-        3. Derive vendor_mood from clamped happiness.
-        4. Detect terminal state.
+        2. Enforce offer-happiness consistency (v6.0 — insult/lowball must hurt).
+        3. Clamp happiness_score ±max_mood_delta from current.
+        4. Validate price direction (prices should only go down).
+        5. Derive vendor_mood from clamped happiness.
+        6. Detect terminal state.
 
     Args:
         ai_decision: Raw proposal from the AI brain.
@@ -236,21 +328,36 @@ def validate_ai_decision(
     )
     warnings.extend(stage_warnings)
 
-    # ── 2. Clamp happiness_score ─────────────────────
+    # ── 2. Offer-happiness consistency (v6.0) ─────────
+    # If the LLM assessed an offer as "insult" or "lowball" but didn't
+    # drop happiness enough, force a minimum drop BEFORE clamping.
+    adjusted_happiness, offer_warnings = validate_offer_happiness_consistency(
+        ai_decision, current_happiness
+    )
+    warnings.extend(offer_warnings)
+
+    # Use the adjusted happiness for clamping (may have been forced down)
+    happiness_for_clamping = adjusted_happiness
+
+    # ── 3. Clamp happiness_score ─────────────────────
     clamped_happiness, was_clamped = clamp_delta(
-        current_happiness, ai_decision.happiness_score, max_mood_delta
+        current_happiness, happiness_for_clamping, max_mood_delta
     )
     if was_clamped:
         warnings.append(
-            f"happiness_score clamped: {ai_decision.happiness_score} → "
+            f"happiness_score clamped: {happiness_for_clamping} → "
             f"{clamped_happiness} (current={current_happiness}, "
             f"max_delta=±{max_mood_delta})"
         )
 
-    # ── 3. Derive vendor_mood from happiness ──────────
+    # ── 4. Price direction validation (v6.0) ──────────
+    price_warnings = validate_price_direction(ai_decision, session_state)
+    warnings.extend(price_warnings)
+
+    # ── 5. Derive vendor_mood from happiness ──────────
     derived_mood = derive_vendor_mood(clamped_happiness)
 
-    # ── 4. Terminal state detection ───────────────────
+    # ── 6. Terminal state detection ───────────────────
     terminal = is_terminal_state(approved_stage)
 
     # ── Log warnings ──────────────────────────────────

@@ -48,11 +48,13 @@ _BACKOFF_DELAYS = [1.0, 2.0]
 
 # ── Fallback response — in-character, safe, keeps current stage ──
 _FALLBACK_DECISION = AIDecision(
-    reply_text="Ek minute bhai, zara ruko... haan, bol raha tha kya?",
+    reply_text="One minute brother, hold on... yes, what were you saying?",
     happiness_score=50,
     negotiation_state=NegotiationStage.INQUIRY,
     vendor_mood=VendorMood.NEUTRAL,
     internal_reasoning="[FALLBACK] LLM call failed after retries — safe in-character response",
+    counter_price=None,
+    offer_assessment="none",
 )
 
 

@@ -157,7 +157,7 @@ class TestTerminalStates:
             session_id="deal-done",
         )
         assert result["negotiation_state"] == "DEAL"
-        assert "khatam" in result["reply_text"].lower()
+        assert "done" in result["reply_text"].lower() or "over" in result["reply_text"].lower()
 
     async def test_closure_returns_closure_reply(self) -> None:
         await self.store.create_session("closed")
