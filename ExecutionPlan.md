@@ -351,7 +351,7 @@ Every boundary — incoming arguments, AI output, state transition — gets vali
 
 ### Tasks
 
-- [ ] **2.1 — Mock OpenAI / LLM**
+- [x] **2.1 — Mock OpenAI / LLM**
   - Input: The composed prompt (system + user message)
   - Output: A valid `AIDecision` JSON matching our schema
   - Returns deterministic test responses based on input keywords:
@@ -360,19 +360,19 @@ Every boundary — incoming arguments, AI output, state transition — gets vali
     - If transcribed text is empty → return "vendor prompts user" response
   - Should simulate ~200ms latency with `asyncio.sleep` to mimic real API behavior
 
-- [ ] **2.2 — Mock Neo4j / Session Store**
+- [x] **2.2 — Mock Neo4j / Session Store**
   - Input: Session ID + game state operations
   - Output: In-memory dict-based session storage
   - Supports `load_session()`, `save_session()`, `create_session()` with same signatures
   - Stores state in a module-level dict keyed by session_id
   - No actual Neo4j driver or Cypher queries involved
 
-- [ ] **2.3 — Service Interface / Abstract Base**
+- [x] **2.3 — Service Interface / Abstract Base**
   - Define a Protocol or ABC for: `LLMService`, `SessionStore`
   - Mock implementations and real implementations both conform to this interface
   - This allows swapping mocks for real services via config toggle (`USE_MOCKS=true/false`)
 
-- [ ] **2.4 — Config Toggle**
+- [x] **2.4 — Config Toggle**
   - `USE_MOCKS=true` → inject mock LLM + mock Neo4j
   - `USE_MOCKS=false` → inject real OpenAI + real Neo4j
   - Full `generate_vendor_response()` can run end-to-end with mocks
