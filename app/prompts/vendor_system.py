@@ -3,9 +3,10 @@ System prompt templates for the Indian street vendor persona ("The God Prompt").
 
 Architecture:
     - STATIC sections: persona, behavioral rules, output schema.
-    - DYNAMIC sections: per-request context (state, scene, history, RAG).
+    - DYNAMIC sections: per-request context (state, scene, history, RAG, graph).
     - `build_system_prompt()` assembles the full prompt for each LLM call.
     - `build_user_message()` assembles the user turn (speech + context).
+    - `build_graph_context_block()` formats Neo4j graph data for the prompt.
 
 Prompt versioning:
     PROMPT_VERSION is logged with every LLM call so we can correlate
@@ -20,8 +21,10 @@ Rules (from rules.md §4):
 
 from __future__ import annotations
 
+from typing import Any
+
 # ── Prompt version — bump on every edit, log with every call ──
-PROMPT_VERSION = "4.0.0"
+PROMPT_VERSION = "5.0.0"
 
 # ═══════════════════════════════════════════════════════════
 #  STATIC SECTIONS (same for every request)
@@ -72,7 +75,28 @@ Terminal states (DEAL, CLOSURE) end the session — no further interaction possi
 - INQUIRY → HAGGLING when active price negotiation begins.
 
 **Stay on the current stage if no clear trigger for a transition.**
-Prefer stability — do NOT jump stages unnecessarily."""
+Prefer stability — do NOT jump stages unnecessarily.
+
+## Graph-Aware Stage Reasoning (CRITICAL)
+
+Use the CONVERSATION GRAPH CONTEXT section below to make informed decisions.
+The graph shows you the full history of this conversation: how many turns
+you've spent in each stage, happiness trends, and items discussed.
+
+**Rules for stage transitions based on graph context:**
+- If you have been in the current stage for only 1-2 turns, STRONGLY prefer
+  staying in that stage. Real conversations don't shift that fast.
+- In INQUIRY, spend at least 2-3 turns before moving to HAGGLING. The customer
+  needs time to browse and ask questions.
+- In HAGGLING, spend at least 3-4 turns of back-and-forth before moving to
+  DEAL or CLOSURE. Real negotiations involve multiple offers and counters.
+- If the happiness trend is RISING, there is no reason to rush to CLOSURE.
+- If the happiness trend is DECLINING and you've been haggling for 5+ turns,
+  consider WALKAWAY or CLOSURE.
+- A WALKAWAY → HAGGLING re-entry should only happen after the customer
+  explicitly comes back and re-engages.
+- Check the "Turns in current stage" value — it tells you how invested the
+  conversation is in the current phase."""
 
 OUTPUT_SCHEMA = """\
 ## Required JSON Output Schema
@@ -120,12 +144,13 @@ def build_system_prompt(
     input_language: str = "en-IN",
     target_language: str = "en-IN",
     wrap_up: bool = False,
+    graph_context: str = "",
 ) -> str:
-    """Assemble the full system prompt with dynamic game state.
+    """Assemble the full system prompt with dynamic game state and graph context.
 
     Static sections (persona, rules, schema) are always included.
-    Dynamic sections inject the current game state so the LLM can
-    make context-aware decisions.
+    Dynamic sections inject the current game state and graph-derived
+    conversation context so the LLM can make context-aware decisions.
 
     Args:
         happiness_score: Current happiness (0-100).
@@ -135,6 +160,7 @@ def build_system_prompt(
         input_language: Language the user is speaking.
         target_language: Language the vendor should reply in.
         wrap_up: If True, inject the wrap-up instruction.
+        graph_context: Pre-formatted graph context block from Neo4j traversal.
 
     Returns:
         The complete system prompt string.
@@ -159,6 +185,11 @@ def build_system_prompt(
         OUTPUT_SCHEMA,
         ANTI_INJECTION,
     ]
+
+    # Insert graph context right after dynamic state so the LLM
+    # sees stage/happiness history before the output schema
+    if graph_context:
+        sections.insert(4, graph_context)
 
     if wrap_up:
         sections.insert(-1, (
@@ -210,3 +241,213 @@ def build_user_message(
     )
 
     return "\n\n".join(parts)
+
+
+# ═══════════════════════════════════════════════════════════
+#  GRAPH CONTEXT BUILDER
+# ═══════════════════════════════════════════════════════════
+
+
+def build_graph_context_block(
+    graph_data: dict[str, Any],
+    current_stage: str,
+    current_turn: int,
+) -> str:
+    """Format raw graph data from Neo4j into an LLM-readable context block.
+
+    This function takes the structured dict returned by
+    SessionStore.get_graph_context() and produces a human-readable
+    text block that gives the LLM deep awareness of conversation flow.
+
+    The block includes:
+        - Stage history: how many turns spent in each stage
+        - Happiness trend: recent score trajectory with direction
+        - Items discussed: what items were mentioned and when
+        - Stage transition log: when and why transitions happened
+        - Stability hint: explicit guidance based on current stage depth
+
+    Args:
+        graph_data: Dict with "turns", "stage_transitions", "items_discussed"
+                    as returned by SessionStore.get_graph_context().
+        current_stage: The current negotiation stage string.
+        current_turn: The current turn number.
+
+    Returns:
+        Formatted context string, or "" if no meaningful data exists.
+    """
+    turns: list[dict[str, Any]] = graph_data.get("turns", [])
+    transitions: list[dict[str, Any]] = graph_data.get("stage_transitions", [])
+    items: list[dict[str, Any]] = graph_data.get("items_discussed", [])
+
+    if not turns:
+        return ""
+
+    parts: list[str] = ["## Conversation Graph Context"]
+
+    # ── Stage occupancy history ───────────────────────────
+    stage_spans = _compute_stage_spans(turns, current_stage, current_turn)
+    if stage_spans:
+        parts.append("### Stage History")
+        for span in stage_spans:
+            if span["end_turn"] is None:
+                parts.append(
+                    f"- {span['stage']} (turns {span['start_turn']}-present): "
+                    f"{span['turn_count']} turns, CURRENT"
+                )
+            else:
+                parts.append(
+                    f"- {span['stage']} (turns {span['start_turn']}-{span['end_turn']}): "
+                    f"{span['turn_count']} turns"
+                )
+
+    # ── Happiness trend ───────────────────────────────────
+    happiness_values = [
+        (t["turn_number"], t["happiness_score"])
+        for t in turns
+        if t.get("happiness_score") is not None
+    ]
+    if happiness_values:
+        # Show last 6 data points
+        recent = happiness_values[-6:]
+        trend_parts = [f"Turn {tn}: {hs}" for tn, hs in recent]
+        trend_str = " → ".join(trend_parts)
+
+        # Compute direction
+        if len(recent) >= 2:
+            first_val = recent[0][1]
+            last_val = recent[-1][1]
+            diff = last_val - first_val
+            if diff > 5:
+                direction = "RISING ↑"
+            elif diff < -5:
+                direction = "DECLINING ↓"
+            else:
+                direction = "STABLE →"
+        else:
+            direction = "INSUFFICIENT DATA"
+
+        parts.append(f"### Happiness Trend (recent)\n  {trend_str}\n  Trend: {direction}")
+
+    # ── Items discussed ───────────────────────────────────
+    if items:
+        parts.append("### Items Discussed")
+        for item in items:
+            name = item.get("item_name", "unknown")
+            first = item.get("first_mentioned", "?")
+            last = item.get("last_mentioned", "?")
+            count = item.get("mention_count", 0)
+            parts.append(
+                f"- {name}: first mentioned turn {first}, "
+                f"last mentioned turn {last}, {count} interaction(s)"
+            )
+
+    # ── Stage transition log ──────────────────────────────
+    if transitions:
+        parts.append("### Stage Transition Log")
+        for tr in transitions:
+            parts.append(
+                f"- Turn {tr.get('at_turn', '?')}: "
+                f"{tr.get('from_stage', '?')} → {tr.get('to_stage', '?')} "
+                f"(happiness: {tr.get('happiness_at_transition', '?')})"
+            )
+
+    # ── Stability hint ────────────────────────────────────
+    turns_in_current = _count_turns_in_current_stage(turns, current_stage)
+    parts.append(
+        f"### Stability Note\n"
+        f"Turns in current stage ({current_stage}): {turns_in_current}\n"
+        f"{_get_stability_hint(current_stage, turns_in_current)}"
+    )
+
+    return "\n\n".join(parts)
+
+
+def _compute_stage_spans(
+    turns: list[dict[str, Any]],
+    current_stage: str,
+    current_turn: int,
+) -> list[dict[str, Any]]:
+    """Compute contiguous stage spans from the turn list."""
+    if not turns:
+        return []
+
+    spans: list[dict[str, Any]] = []
+    current_span_stage = turns[0].get("stage", "GREETING")
+    span_start = turns[0].get("turn_number", 1)
+    span_count = 1
+
+    for i in range(1, len(turns)):
+        turn_stage = turns[i].get("stage", current_span_stage)
+        if turn_stage != current_span_stage:
+            spans.append({
+                "stage": current_span_stage,
+                "start_turn": span_start,
+                "end_turn": turns[i - 1].get("turn_number", span_start),
+                "turn_count": span_count,
+            })
+            current_span_stage = turn_stage
+            span_start = turns[i].get("turn_number", span_start + span_count)
+            span_count = 1
+        else:
+            span_count += 1
+
+    # Final (current) span — open-ended
+    spans.append({
+        "stage": current_span_stage,
+        "start_turn": span_start,
+        "end_turn": None,
+        "turn_count": span_count,
+    })
+
+    return spans
+
+
+def _count_turns_in_current_stage(
+    turns: list[dict[str, Any]],
+    current_stage: str,
+) -> int:
+    """Count how many consecutive recent turns are in the current stage."""
+    count = 0
+    for turn in reversed(turns):
+        if turn.get("stage") == current_stage:
+            count += 1
+        else:
+            break
+    return count
+
+
+def _get_stability_hint(stage: str, turns_in_stage: int) -> str:
+    """Generate a stage-specific stability hint for the LLM."""
+    hints = {
+        "GREETING": (
+            "Greetings are brief. Move to INQUIRY once the customer "
+            "asks about a specific item or price."
+        ),
+        "INQUIRY": (
+            f"You've been in INQUIRY for {turns_in_stage} turn(s). "
+            + (
+                "Let the customer browse — don't rush to HAGGLING yet."
+                if turns_in_stage < 3
+                else "The customer has been asking questions. If they start "
+                "negotiating price, HAGGLING is appropriate."
+            )
+        ),
+        "HAGGLING": (
+            f"You've been haggling for {turns_in_stage} turn(s). "
+            + (
+                "Real negotiations take multiple rounds. Keep haggling — "
+                "do NOT jump to DEAL or CLOSURE yet."
+                if turns_in_stage < 4
+                else "This has been a substantial negotiation. A DEAL or "
+                "WALKAWAY could be natural if there's a clear trigger."
+            )
+        ),
+        "WALKAWAY": (
+            f"Customer is walking away ({turns_in_stage} turn(s)). "
+            "Only bring them back to HAGGLING if they explicitly re-engage "
+            "AND happiness > 40. Otherwise move to CLOSURE."
+        ),
+        "DEAL": "Deal is done. Session is terminal.",
+        "CLOSURE": "Negotiation has ended. Session is terminal.",
+    }
+    return hints.get(stage, "Stay in the current stage unless there is a clear reason to move.")

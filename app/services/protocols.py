@@ -65,6 +65,7 @@ class SessionStore(Protocol):
     """Protocol for game state persistence (Neo4j or in-memory mock).
 
     Stores per-session state: mood, stage, turn count, price history.
+    Also maintains a session graph: turns, items, stage transitions.
     This is SEPARATE from Dev B's conversation memory (dialogue text).
 
     Implementations:
@@ -115,5 +116,61 @@ class SessionStore(Protocol):
 
         Raises:
             StateStoreError: If store is unreachable.
+        """
+        ...
+
+    async def record_turn(
+        self,
+        session_id: str,
+        turn_number: int,
+        role: str,
+        text_snippet: str,
+        happiness_score: int,
+        stage: str,
+        object_grabbed: Optional[str] = None,
+    ) -> None:
+        """Record a conversation turn as a node in the session graph.
+
+        Creates a turn node linked to the session and chained to
+        the previous turn. If object_grabbed is set, links an Item node.
+
+        Args:
+            session_id: Unique session identifier.
+            turn_number: Sequential turn number (1-based).
+            role: "user" or "vendor".
+            text_snippet: Truncated text of what was said.
+            happiness_score: Happiness score at this turn.
+            stage: Negotiation stage at this turn.
+            object_grabbed: Item the user is interacting with (if any).
+        """
+        ...
+
+    async def record_stage_transition(
+        self,
+        session_id: str,
+        from_stage: str,
+        to_stage: str,
+        turn_number: int,
+        happiness_score: int,
+    ) -> None:
+        """Record a stage transition in the session graph.
+
+        Args:
+            session_id: Unique session identifier.
+            from_stage: Stage being left.
+            to_stage: Stage being entered.
+            turn_number: Turn at which the transition occurred.
+            happiness_score: Happiness at the moment of transition.
+        """
+        ...
+
+    async def get_graph_context(self, session_id: str) -> dict[str, Any]:
+        """Traverse the session graph and return structured context.
+
+        Returns:
+            Dict with keys:
+            - "turns": list of turn dicts (ordered by turn_number)
+            - "stage_transitions": list of transition dicts
+            - "items_discussed": list of item dicts with mention info
         """
         ...

@@ -147,12 +147,17 @@ class MockSessionStore:
     """In-memory session store — no Neo4j needed.
 
     Stores game state in a plain dict keyed by session_id.
+    Also maintains in-memory graph structures (turns, items,
+    stage transitions) to mirror Neo4jSessionStore's graph behavior.
     Thread-safe for single-process async usage (no locks needed
     since asyncio is single-threaded within the event loop).
     """
 
     def __init__(self) -> None:
         self._sessions: dict[str, dict[str, Any]] = {}
+        self._turns: dict[str, list[dict[str, Any]]] = {}
+        self._stage_transitions: dict[str, list[dict[str, Any]]] = {}
+        self._items: dict[str, dict[str, dict[str, Any]]] = {}  # session_id -> {item_name -> info}
 
     async def create_session(self, session_id: str) -> dict[str, Any]:
         """Create a new session with default initial state."""
@@ -195,11 +200,104 @@ class MockSessionStore:
             },
         )
 
+    async def record_turn(
+        self,
+        session_id: str,
+        turn_number: int,
+        role: str,
+        text_snippet: str,
+        happiness_score: int,
+        stage: str,
+        object_grabbed: Optional[str] = None,
+    ) -> None:
+        """Record a conversation turn in the in-memory graph."""
+        if session_id not in self._turns:
+            self._turns[session_id] = []
+
+        snippet = (text_snippet[:150] + "...") if len(text_snippet) > 150 else text_snippet
+
+        self._turns[session_id].append({
+            "turn_number": turn_number,
+            "role": role,
+            "text_snippet": snippet,
+            "happiness_score": happiness_score,
+            "stage": stage,
+            "object_grabbed": object_grabbed or "",
+            "timestamp": "mock",
+        })
+
+        # Track item interactions
+        if object_grabbed:
+            if session_id not in self._items:
+                self._items[session_id] = {}
+            item_info = self._items[session_id].get(object_grabbed, {
+                "item_name": object_grabbed,
+                "first_mentioned": turn_number,
+                "last_mentioned": turn_number,
+                "mention_count": 0,
+            })
+            item_info["last_mentioned"] = turn_number
+            item_info["mention_count"] = item_info.get("mention_count", 0) + 1
+            self._items[session_id][object_grabbed] = item_info
+
+        logger.debug(
+            "MockSessionStore: turn recorded",
+            extra={
+                "step": "mock_store_turn",
+                "session_id": session_id,
+                "turn_number": turn_number,
+            },
+        )
+
+    async def record_stage_transition(
+        self,
+        session_id: str,
+        from_stage: str,
+        to_stage: str,
+        turn_number: int,
+        happiness_score: int,
+    ) -> None:
+        """Record a stage transition in the in-memory graph."""
+        if session_id not in self._stage_transitions:
+            self._stage_transitions[session_id] = []
+
+        self._stage_transitions[session_id].append({
+            "from_stage": from_stage,
+            "to_stage": to_stage,
+            "at_turn": turn_number,
+            "happiness_at_transition": happiness_score,
+        })
+
+        logger.debug(
+            "MockSessionStore: stage transition recorded",
+            extra={
+                "step": "mock_store_transition",
+                "session_id": session_id,
+                "from": from_stage,
+                "to": to_stage,
+            },
+        )
+
+    async def get_graph_context(self, session_id: str) -> dict[str, Any]:
+        """Return structured graph context from in-memory data."""
+        turns = self._turns.get(session_id, [])
+        transitions = self._stage_transitions.get(session_id, [])
+        items = list(self._items.get(session_id, {}).values())
+
+        return {
+            "turns": turns,
+            "stage_transitions": transitions,
+            "items_discussed": items,
+        }
+
     # ── Test helpers (not part of protocol) ───────────────
 
     def clear(self) -> None:
-        """Clear all sessions. For testing only."""
+        """Clear all sessions and graph data. For testing only."""
         self._sessions.clear()
+        self._turns.clear()
+        self._stage_transitions.clear()
+        self._items.clear()
 
     @property
     def session_count(self) -> int:

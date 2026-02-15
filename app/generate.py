@@ -40,6 +40,7 @@ from app.models.request import SceneContext
 from app.models.response import VendorResponse
 from app.prompts.vendor_system import (
     PROMPT_VERSION,
+    build_graph_context_block,
     build_system_prompt,
     build_user_message,
 )
@@ -159,6 +160,40 @@ async def generate_vendor_response(
         },
     )
 
+    # ── 2¼. Retrieve graph context from session graph ────
+    t0 = time.monotonic()
+    graph_context_block = ""
+    try:
+        graph_data = await store.get_graph_context(session_id)
+        current_stage_for_graph = session_state.get(
+            "negotiation_state", parsed_scene.negotiation_state.value
+        )
+        graph_context_block = build_graph_context_block(
+            graph_data=graph_data,
+            current_stage=current_stage_for_graph,
+            current_turn=session_state.get("turn_count", 0) + 1,
+        )
+        logger.debug(
+            "Graph context built",
+            extra={
+                "step": "graph_context",
+                "request_id": request_id,
+                "duration_ms": round((time.monotonic() - t0) * 1000, 1),
+                "context_length": len(graph_context_block),
+                "turns_in_graph": len(graph_data.get("turns", [])),
+            },
+        )
+    except Exception as exc:
+        # Graph context is a soft enhancement — failure should NOT block the pipeline
+        logger.warning(
+            "Graph context retrieval failed (non-critical, continuing without it)",
+            extra={
+                "step": "graph_context",
+                "request_id": request_id,
+                "error": str(exc),
+            },
+        )
+
     # ── 2½. Check terminal state ─────────────────────────
     current_stage_str = session_state.get(
         "negotiation_state", parsed_scene.negotiation_state.value
@@ -241,6 +276,7 @@ async def generate_vendor_response(
         input_language=parsed_scene.input_language.value,
         target_language=parsed_scene.target_language.value,
         wrap_up=turn_count >= WRAP_UP_TURN_THRESHOLD,
+        graph_context=graph_context_block,
     )
 
     user_message = build_user_message(
@@ -370,6 +406,69 @@ async def generate_vendor_response(
             "duration_ms": round((time.monotonic() - t0) * 1000, 1),
         },
     )
+
+    # ── 5½. Record turns and transitions in the graph ────
+    # User turn (what the customer said this turn)
+    try:
+        await store.record_turn(
+            session_id=session_id,
+            turn_number=turn_count,
+            role="user",
+            text_snippet=transcribed_text,
+            happiness_score=effective_happiness,  # happiness before LLM
+            stage=effective_stage,
+            object_grabbed=parsed_scene.object_grabbed,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Failed to record user turn in graph (non-critical)",
+            extra={
+                "step": "graph_record_user",
+                "request_id": request_id,
+                "error": str(exc),
+            },
+        )
+
+    # Vendor turn (what the vendor replied)
+    try:
+        await store.record_turn(
+            session_id=session_id,
+            turn_number=turn_count,
+            role="vendor",
+            text_snippet=response.reply_text,
+            happiness_score=response.happiness_score,
+            stage=response.negotiation_state,
+            object_grabbed=parsed_scene.object_grabbed,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Failed to record vendor turn in graph (non-critical)",
+            extra={
+                "step": "graph_record_vendor",
+                "request_id": request_id,
+                "error": str(exc),
+            },
+        )
+
+    # Record stage transition if the stage actually changed
+    if response.negotiation_state != effective_stage:
+        try:
+            await store.record_stage_transition(
+                session_id=session_id,
+                from_stage=effective_stage,
+                to_stage=response.negotiation_state,
+                turn_number=turn_count,
+                happiness_score=response.happiness_score,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to record stage transition in graph (non-critical)",
+                extra={
+                    "step": "graph_record_transition",
+                    "request_id": request_id,
+                    "error": str(exc),
+                },
+            )
 
     # ── 6. Done ──────────────────────────────────────────
     total_ms = round((time.monotonic() - t_start) * 1000, 1)
