@@ -55,6 +55,7 @@ _FALLBACK_DECISION = AIDecision(
     internal_reasoning="[FALLBACK] LLM call failed after retries — safe in-character response",
     counter_price=None,
     offer_assessment="none",
+    suggested_user_response="Can you show me what you have?",
 )
 
 

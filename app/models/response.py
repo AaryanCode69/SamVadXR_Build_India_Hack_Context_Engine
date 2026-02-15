@@ -74,6 +74,16 @@ class AIDecision(BaseModel):
             "about offer quality before responding."
         ),
     )
+    suggested_user_response: str = Field(
+        ...,
+        min_length=1,
+        description=(
+            "An ideal response the user could say next, always in English. "
+            "Context-aware: based on the current negotiation stage, "
+            "vendor's reply, and conversation history. Helps language "
+            "learners who don't know what to say."
+        ),
+    )
 
     # ── Validators ────────────────────────────────────────
 
@@ -125,6 +135,14 @@ class VendorResponse(BaseModel):
     vendor_mood: str = Field(
         ...,
         description="enthusiastic|friendly|neutral|annoyed|angry",
+    )
+    suggested_user_response: str = Field(
+        ...,
+        min_length=1,
+        description=(
+            "An ideal response the user could say next, always in English. "
+            "Displayed as a hint for language learners."
+        ),
     )
 
     @field_validator("negotiation_state")

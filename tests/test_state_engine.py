@@ -333,6 +333,7 @@ def _make_decision(**overrides: object) -> AIDecision:
         "negotiation_state": NegotiationStage.INQUIRY,
         "vendor_mood": VendorMood.NEUTRAL,
         "internal_reasoning": "test",
+        "suggested_user_response": "How much is this?",
     }
     defaults.update(overrides)
     return AIDecision(**defaults)

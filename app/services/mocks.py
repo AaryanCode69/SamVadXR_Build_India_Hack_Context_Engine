@@ -85,6 +85,7 @@ class MockLLMService:
                 internal_reasoning="[MOCK] User greeted → greeting response",
                 counter_price=None,
                 offer_assessment="none",
+                suggested_user_response="Can you show me what you have?",
             )
 
         if any(kw in speech for kw in ("kitne", "price", "cost", "kidhar", "कितने")):
@@ -96,6 +97,7 @@ class MockLLMService:
                 internal_reasoning="[MOCK] User asked price → inquiry response",
                 counter_price=60,
                 offer_assessment="none",
+                suggested_user_response="That seems a bit high. How about 40 rupees?",
             )
 
         if any(kw in speech for kw in ("nahi", "no", "chhodo", "chalo", "bahut")):
@@ -107,6 +109,7 @@ class MockLLMService:
                 internal_reasoning="[MOCK] User rejecting → walkaway response",
                 counter_price=None,
                 offer_assessment="none",
+                suggested_user_response="Okay, what is your best price then?",
             )
 
         if any(kw in speech for kw in ("theek", "deal", "done", "pakka", "le lo")):
@@ -118,6 +121,7 @@ class MockLLMService:
                 internal_reasoning="[MOCK] User agreed → deal response",
                 counter_price=55,
                 offer_assessment="excellent",
+                suggested_user_response="Thank you! Please pack it up.",
             )
 
         if not speech.strip():
@@ -129,6 +133,7 @@ class MockLLMService:
                 internal_reasoning="[MOCK] Empty input → vendor prompts user",
                 counter_price=None,
                 offer_assessment="none",
+                suggested_user_response="Hello! I am looking to buy something.",
             )
 
         # Default: neutral greeting response
@@ -140,6 +145,7 @@ class MockLLMService:
             internal_reasoning="[MOCK] Default → greeting response",
             counter_price=None,
             offer_assessment="none",
+            suggested_user_response="How much does this cost?",
         )
 
 

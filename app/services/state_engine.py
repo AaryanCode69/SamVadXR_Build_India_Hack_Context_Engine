@@ -58,6 +58,7 @@ class ValidatedState:
     happiness_score: int
     negotiation_state: NegotiationStage
     vendor_mood: VendorMood
+    suggested_user_response: str = ""
     internal_reasoning: str = ""
     warnings: list[str] = field(default_factory=list)
     is_terminal: bool = False
@@ -390,6 +391,7 @@ def validate_ai_decision(
         happiness_score=clamped_happiness,
         negotiation_state=approved_stage,
         vendor_mood=derived_mood,
+        suggested_user_response=ai_decision.suggested_user_response,
         internal_reasoning=ai_decision.internal_reasoning,
         warnings=warnings,
         is_terminal=terminal,

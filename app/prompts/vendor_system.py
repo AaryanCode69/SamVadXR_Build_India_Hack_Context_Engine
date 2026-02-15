@@ -24,7 +24,7 @@ from __future__ import annotations
 from typing import Any
 
 # ── Prompt version — bump on every edit, log with every call ──
-PROMPT_VERSION = "7.0.0"
+PROMPT_VERSION = "8.0.0"
 
 # ═══════════════════════════════════════════════════════════
 #  STATIC SECTIONS (same for every request)
@@ -137,6 +137,7 @@ The JSON object must have exactly these fields:
   "happiness_score": <int 0-100 — your overall happiness after this interaction>,
   "negotiation_state": "<GREETING|INQUIRY|HAGGLING|DEAL|WALKAWAY|CLOSURE>",
   "vendor_mood": "<enthusiastic|friendly|neutral|annoyed|angry>",
+  "suggested_user_response": "<string — an ideal response the customer could say next, ALWAYS in English. This MUST be grounded in TWO sources: (1) the CULTURAL CONTEXT (RAG) section — use the specific items, prices, and details mentioned there, and (2) your own reply_text — the suggestion should be a natural follow-up to what you just said. NEVER pull item names from the persona description (brass, silk, etc.) — ONLY use items explicitly listed in the CULTURAL CONTEXT or object_grabbed field. If no CULTURAL CONTEXT is provided, suggest a generic response like asking what is available. Stage-specific guidance: GREETING → greeting or ask about available items from CULTURAL CONTEXT, INQUIRY → ask about price or quality of items in CULTURAL CONTEXT, HAGGLING → counter-offer on the item being discussed, WALKAWAY → re-engage or leave, DEAL/CLOSURE → thank-you or goodbye. Keep it 5-20 words.>",
   "internal_reasoning": "<string — brief explanation of why you chose this response>"
 }
 

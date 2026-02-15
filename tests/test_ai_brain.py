@@ -254,6 +254,7 @@ def _valid_ai_response(**overrides: Any) -> str:
         "negotiation_state": "HAGGLING",
         "vendor_mood": "enthusiastic",
         "internal_reasoning": "User asked price → moving to haggling",
+        "suggested_user_response": "That is too expensive. How about 400?",
     }
     data.update(overrides)
     return json.dumps(data)

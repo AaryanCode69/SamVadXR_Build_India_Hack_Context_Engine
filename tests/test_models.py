@@ -315,6 +315,7 @@ class TestVendorResponse:
             "happiness_score": 65,
             "negotiation_state": "HAGGLING",
             "vendor_mood": "enthusiastic",
+            "suggested_user_response": "That seems expensive. Can you lower the price?",
         }
 
     def test_valid_response(self, valid_data: dict) -> None:
@@ -323,6 +324,7 @@ class TestVendorResponse:
         assert r.happiness_score == 65
         assert r.negotiation_state == "HAGGLING"
         assert r.vendor_mood == "enthusiastic"
+        assert r.suggested_user_response == "That seems expensive. Can you lower the price?"
 
     def test_model_dump_returns_dict(self, valid_data: dict) -> None:
         r = VendorResponse.model_validate(valid_data)
@@ -338,6 +340,7 @@ class TestVendorResponse:
                 happiness_score=50,
                 negotiation_state=stage.value,
                 vendor_mood="neutral",
+                suggested_user_response="How much is this?",
             )
             assert r.negotiation_state == stage.value
 
@@ -348,6 +351,7 @@ class TestVendorResponse:
                 happiness_score=50,
                 negotiation_state="WALK_AWAY",  # old v2.0 name
                 vendor_mood="neutral",
+                suggested_user_response="How much is this?",
             )
 
     def test_invalid_vendor_mood_raises(self) -> None:
@@ -357,6 +361,7 @@ class TestVendorResponse:
                 happiness_score=50,
                 negotiation_state="INQUIRY",
                 vendor_mood="happy",
+                suggested_user_response="How much is this?",
             )
 
     def test_happiness_boundary_zero(self) -> None:
@@ -365,6 +370,7 @@ class TestVendorResponse:
             happiness_score=0,
             negotiation_state="CLOSURE",
             vendor_mood="angry",
+            suggested_user_response="Goodbye.",
         )
         assert r.happiness_score == 0
 
@@ -374,6 +380,7 @@ class TestVendorResponse:
             happiness_score=100,
             negotiation_state="DEAL",
             vendor_mood="enthusiastic",
+            suggested_user_response="Thank you!",
         )
         assert r.happiness_score == 100
 
@@ -384,6 +391,7 @@ class TestVendorResponse:
                 happiness_score=-1,
                 negotiation_state="INQUIRY",
                 vendor_mood="neutral",
+                suggested_user_response="How much?",
             )
 
     def test_happiness_above_100_raises(self) -> None:
@@ -393,6 +401,7 @@ class TestVendorResponse:
                 happiness_score=101,
                 negotiation_state="INQUIRY",
                 vendor_mood="neutral",
+                suggested_user_response="How much?",
             )
 
     def test_empty_reply_text_raises(self) -> None:
@@ -402,6 +411,7 @@ class TestVendorResponse:
                 happiness_score=50,
                 negotiation_state="INQUIRY",
                 vendor_mood="neutral",
+                suggested_user_response="How much?",
             )
 
     def test_friendly_mood_accepted(self) -> None:
@@ -410,6 +420,7 @@ class TestVendorResponse:
             happiness_score=70,
             negotiation_state="INQUIRY",
             vendor_mood="friendly",
+            suggested_user_response="How much is this?",
         )
         assert r.vendor_mood == "friendly"
 

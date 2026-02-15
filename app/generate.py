@@ -223,6 +223,7 @@ async def generate_vendor_response(
             happiness_score=session_state.get("happiness_score", 50),
             negotiation_state=current_stage.value,
             vendor_mood="neutral",
+            suggested_user_response="Thank you, goodbye!",
         )
         return response.model_dump()
 
@@ -247,6 +248,7 @@ async def generate_vendor_response(
             happiness_score=max(session_state.get("happiness_score", 50) - 10, 0),
             negotiation_state=NegotiationStage.CLOSURE.value,
             vendor_mood="annoyed",
+            suggested_user_response="Okay, I will come back another time.",
         )
         # Persist forced closure
         session_state["negotiation_state"] = NegotiationStage.CLOSURE.value
@@ -354,6 +356,7 @@ async def generate_vendor_response(
             happiness_score=validated.happiness_score,
             negotiation_state=validated.negotiation_state.value,
             vendor_mood=validated.vendor_mood.value,
+            suggested_user_response=validated.suggested_user_response,
         )
     except ValidationError as exc:
         logger.error(
