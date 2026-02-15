@@ -1,0 +1,19 @@
+[project]
+name = "samvadxr-orchestration"
+version = "0.1.0"
+description = "Samvad XR — Orchestration backend for the VR language immersion platform"
+requires-python = ">=3.11"
+readme = "README.md"
+
+[tool.black]
+line-length = 88
+
+[tool.isort]
+profile = "black"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = [
+    "integration: marks tests that hit real external APIs (deselect with '-m \"not integration\"')",
+]
