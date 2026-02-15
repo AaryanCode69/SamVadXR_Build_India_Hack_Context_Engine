@@ -82,12 +82,9 @@ class SessionStore(Protocol):
             Dict with initial game state:
             {
                 "session_id": str,
-                "vendor_happiness": 50,
-                "vendor_patience": 70,
-                "negotiation_stage": "GREETING",
-                "current_price": 0,
+                "happiness_score": 50,
+                "negotiation_state": "GREETING",
                 "turn_count": 0,
-                "price_history": [],
             }
 
         Raises:

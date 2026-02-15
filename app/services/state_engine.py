@@ -5,9 +5,9 @@ The AI proposes state changes; this engine approves or rejects them.
 Every override is logged at WARN level.
 
 Public API:
-    validate_transition(current, proposed, vendor_happiness) → (stage, warnings)
+    validate_transition(current, proposed, happiness_score) → (stage, warnings)
     validate_ai_decision(ai_decision, session_state, config) → ValidatedState
-    derive_vendor_mood(vendor_happiness) → VendorMood
+    derive_vendor_mood(happiness_score) → VendorMood
 """
 
 from __future__ import annotations
@@ -43,11 +43,8 @@ class ValidatedState:
     """
 
     reply_text: str
-    new_mood: int
-    new_stage: NegotiationStage
-    price_offered: int
-    vendor_happiness: int
-    vendor_patience: int
+    happiness_score: int
+    negotiation_state: NegotiationStage
     vendor_mood: VendorMood
     internal_reasoning: str = ""
     warnings: list[str] = field(default_factory=list)
@@ -62,13 +59,13 @@ class ValidatedState:
 def validate_transition(
     current_stage: NegotiationStage,
     proposed_stage: NegotiationStage,
-    vendor_happiness: int,
+    happiness_score: int,
 ) -> tuple[NegotiationStage, list[str]]:
     """Validate a proposed stage transition.
 
     Rules:
         - Transition must be in LEGAL_TRANSITIONS graph.
-        - WALKAWAY → HAGGLING only if vendor_happiness > 40.
+        - WALKAWAY → HAGGLING only if happiness_score > 40.
         - Terminal stages cannot be left.
         - Staying in the same stage is always allowed.
 
@@ -99,14 +96,14 @@ def validate_transition(
         )
         return current_stage, warnings
 
-    # Special rule: WALKAWAY → HAGGLING only if vendor_happiness > 40
+    # Special rule: WALKAWAY → HAGGLING only if happiness_score > 40
     if (
         current_stage == NegotiationStage.WALKAWAY
         and proposed_stage == NegotiationStage.HAGGLING
-        and vendor_happiness <= 40
+        and happiness_score <= 40
     ):
         warnings.append(
-            f"WALKAWAY → HAGGLING blocked: vendor_happiness={vendor_happiness} "
+            f"WALKAWAY → HAGGLING blocked: happiness_score={happiness_score} "
             f"(must be > 40). Forcing CLOSURE."
         )
         return NegotiationStage.CLOSURE, warnings
@@ -119,20 +116,23 @@ def validate_transition(
 # ═══════════════════════════════════════════════════════════
 
 
-def derive_vendor_mood(vendor_happiness: int) -> VendorMood:
+def derive_vendor_mood(happiness_score: int) -> VendorMood:
     """Derive categorical VendorMood from numeric happiness.
 
     Ranges (from enums.py docstring):
-        happiness > 70  → enthusiastic
-        happiness 41-70 → neutral
+        happiness > 80  → enthusiastic
+        happiness 61-80 → friendly
+        happiness 41-60 → neutral
         happiness 21-40 → annoyed
         happiness ≤ 20  → angry
     """
-    if vendor_happiness > 70:
+    if happiness_score > 80:
         return VendorMood.ENTHUSIASTIC
-    if vendor_happiness > 40:
+    if happiness_score > 60:
+        return VendorMood.FRIENDLY
+    if happiness_score > 40:
         return VendorMood.NEUTRAL
-    if vendor_happiness > 20:
+    if happiness_score > 20:
         return VendorMood.ANNOYED
     return VendorMood.ANGRY
 
@@ -171,9 +171,7 @@ def build_session_summary(
     session_id: str,
     stage: NegotiationStage,
     turn_count: int,
-    final_price: int,
-    vendor_happiness: int,
-    vendor_patience: int,
+    happiness_score: int,
 ) -> dict[str, Any]:
     """Build a structured summary for terminal-state logging."""
     result = "won" if stage == NegotiationStage.DEAL else "ended"
@@ -182,9 +180,7 @@ def build_session_summary(
         "result": result,
         "final_stage": stage.value,
         "turns_taken": turn_count,
-        "final_price": final_price,
-        "final_vendor_happiness": vendor_happiness,
-        "final_vendor_patience": vendor_patience,
+        "final_happiness_score": happiness_score,
     }
 
 
@@ -206,12 +202,9 @@ def validate_ai_decision(
 
     Steps:
         1. Validate stage transition (legal + special rules).
-        2. Clamp vendor_happiness ±max_mood_delta from current.
-        3. Clamp vendor_patience ±max_mood_delta from current.
-        4. Clamp new_mood ±max_mood_delta from current.
-        5. Derive vendor_mood from clamped happiness.
-        6. Ensure price_offered is non-negative.
-        7. Detect terminal state.
+        2. Clamp happiness_score ±max_mood_delta from current.
+        3. Derive vendor_mood from clamped happiness.
+        4. Detect terminal state.
 
     Args:
         ai_decision: Raw proposal from the AI brain.
@@ -224,10 +217,8 @@ def validate_ai_decision(
     warnings: list[str] = []
 
     # Current authoritative values
-    current_happiness = session_state.get("vendor_happiness", 50)
-    current_patience = session_state.get("vendor_patience", 70)
-    current_mood = current_happiness  # new_mood tracks happiness for v3
-    current_stage_str = session_state.get("negotiation_stage", "GREETING")
+    current_happiness = session_state.get("happiness_score", 50)
+    current_stage_str = session_state.get("negotiation_state", "GREETING")
 
     try:
         current_stage = NegotiationStage(current_stage_str)
@@ -239,55 +230,27 @@ def validate_ai_decision(
         )
 
     # ── 1. Stage transition ───────────────────────────
-    proposed_stage = ai_decision.new_stage
+    proposed_stage = ai_decision.negotiation_state
     approved_stage, stage_warnings = validate_transition(
-        current_stage, proposed_stage, ai_decision.vendor_happiness
+        current_stage, proposed_stage, ai_decision.happiness_score
     )
     warnings.extend(stage_warnings)
 
-    # ── 2. Clamp vendor_happiness ─────────────────────
+    # ── 2. Clamp happiness_score ─────────────────────
     clamped_happiness, was_clamped = clamp_delta(
-        current_happiness, ai_decision.vendor_happiness, max_mood_delta
+        current_happiness, ai_decision.happiness_score, max_mood_delta
     )
     if was_clamped:
         warnings.append(
-            f"vendor_happiness clamped: {ai_decision.vendor_happiness} → "
+            f"happiness_score clamped: {ai_decision.happiness_score} → "
             f"{clamped_happiness} (current={current_happiness}, "
             f"max_delta=±{max_mood_delta})"
         )
 
-    # ── 3. Clamp vendor_patience ──────────────────────
-    clamped_patience, was_clamped = clamp_delta(
-        current_patience, ai_decision.vendor_patience, max_mood_delta
-    )
-    if was_clamped:
-        warnings.append(
-            f"vendor_patience clamped: {ai_decision.vendor_patience} → "
-            f"{clamped_patience} (current={current_patience}, "
-            f"max_delta=±{max_mood_delta})"
-        )
-
-    # ── 4. Clamp new_mood ─────────────────────────────
-    clamped_mood, was_clamped = clamp_delta(
-        current_mood, ai_decision.new_mood, max_mood_delta
-    )
-    if was_clamped:
-        warnings.append(
-            f"new_mood clamped: {ai_decision.new_mood} → "
-            f"{clamped_mood} (current={current_mood}, "
-            f"max_delta=±{max_mood_delta})"
-        )
-
-    # ── 5. Derive vendor_mood from happiness ──────────
+    # ── 3. Derive vendor_mood from happiness ──────────
     derived_mood = derive_vendor_mood(clamped_happiness)
 
-    # ── 6. Price sanity ───────────────────────────────
-    price = ai_decision.price_offered if ai_decision.price_offered is not None else 0
-    if price < 0:
-        warnings.append(f"Negative price_offered={price} → clamped to 0")
-        price = 0
-
-    # ── 7. Terminal state detection ───────────────────
+    # ── 4. Terminal state detection ───────────────────
     terminal = is_terminal_state(approved_stage)
 
     # ── Log warnings ──────────────────────────────────
@@ -305,9 +268,7 @@ def validate_ai_decision(
             session_id=session_state.get("session_id", "unknown"),
             stage=approved_stage,
             turn_count=session_state.get("turn_count", 0),
-            final_price=price,
-            vendor_happiness=clamped_happiness,
-            vendor_patience=clamped_patience,
+            happiness_score=clamped_happiness,
         )
         logger.info(
             "Terminal state reached",
@@ -319,11 +280,8 @@ def validate_ai_decision(
 
     return ValidatedState(
         reply_text=ai_decision.reply_text,
-        new_mood=clamped_mood,
-        new_stage=approved_stage,
-        price_offered=price,
-        vendor_happiness=clamped_happiness,
-        vendor_patience=clamped_patience,
+        happiness_score=clamped_happiness,
+        negotiation_state=approved_stage,
         vendor_mood=derived_mood,
         internal_reasoning=ai_decision.internal_reasoning,
         warnings=warnings,

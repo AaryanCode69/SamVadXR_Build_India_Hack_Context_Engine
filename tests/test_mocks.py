@@ -59,60 +59,57 @@ class TestMockLLMService:
     async def test_greeting_namaste(self) -> None:
         decision = await self.llm.generate_decision("system", "Namaste bhaiya!")
         assert isinstance(decision, AIDecision)
-        assert decision.new_stage == NegotiationStage.GREETING
-        assert decision.vendor_mood == VendorMood.ENTHUSIASTIC
+        assert decision.negotiation_state == NegotiationStage.GREETING
+        assert decision.vendor_mood == VendorMood.FRIENDLY
         assert "Namaste" in decision.reply_text
 
     async def test_greeting_hello(self) -> None:
         decision = await self.llm.generate_decision("system", "Hello vendor!")
-        assert decision.new_stage == NegotiationStage.GREETING
+        assert decision.negotiation_state == NegotiationStage.GREETING
 
     async def test_price_inquiry_kitne(self) -> None:
         decision = await self.llm.generate_decision("system", "Ye kitne ka hai?")
-        assert decision.new_stage == NegotiationStage.HAGGLING
-        assert decision.price_offered == 800
-        assert decision.vendor_mood == VendorMood.ENTHUSIASTIC
+        assert decision.negotiation_state == NegotiationStage.INQUIRY
+        assert decision.vendor_mood == VendorMood.FRIENDLY
 
     async def test_price_inquiry_hindi(self) -> None:
         decision = await self.llm.generate_decision("system", "कितने का है?")
-        assert decision.new_stage == NegotiationStage.HAGGLING
-        assert decision.price_offered is not None
+        assert decision.negotiation_state == NegotiationStage.INQUIRY
 
     async def test_price_inquiry_english(self) -> None:
         decision = await self.llm.generate_decision("system", "What's the price?")
-        assert decision.new_stage == NegotiationStage.HAGGLING
+        assert decision.negotiation_state == NegotiationStage.INQUIRY
 
     async def test_rejection_nahi(self) -> None:
         decision = await self.llm.generate_decision("system", "Nahi bhai, bahut mehnga hai")
-        assert decision.new_stage == NegotiationStage.WALKAWAY
+        assert decision.negotiation_state == NegotiationStage.WALKAWAY
         assert decision.vendor_mood == VendorMood.ANNOYED
 
     async def test_rejection_no(self) -> None:
         decision = await self.llm.generate_decision("system", "No way, too expensive")
-        assert decision.new_stage == NegotiationStage.WALKAWAY
+        assert decision.negotiation_state == NegotiationStage.WALKAWAY
 
     async def test_deal_theek(self) -> None:
         decision = await self.llm.generate_decision("system", "Theek hai, le lo")
-        assert decision.new_stage == NegotiationStage.DEAL
+        assert decision.negotiation_state == NegotiationStage.DEAL
         assert decision.vendor_mood == VendorMood.ENTHUSIASTIC
-        assert decision.price_offered is not None
 
     async def test_deal_done(self) -> None:
         decision = await self.llm.generate_decision("system", "Done, deal pakka!")
-        assert decision.new_stage == NegotiationStage.DEAL
+        assert decision.negotiation_state == NegotiationStage.DEAL
 
     async def test_empty_input_prompts_user(self) -> None:
         decision = await self.llm.generate_decision("system", "")
-        assert decision.new_stage == NegotiationStage.BROWSING
+        assert decision.negotiation_state == NegotiationStage.GREETING
         assert decision.vendor_mood == VendorMood.NEUTRAL
 
     async def test_whitespace_input_prompts_user(self) -> None:
         decision = await self.llm.generate_decision("system", "   ")
-        assert decision.new_stage == NegotiationStage.BROWSING
+        assert decision.negotiation_state == NegotiationStage.GREETING
 
     async def test_default_browsing_response(self) -> None:
         decision = await self.llm.generate_decision("system", "Yeh silk acchi hai")
-        assert decision.new_stage == NegotiationStage.BROWSING
+        assert decision.negotiation_state == NegotiationStage.GREETING
         assert decision.vendor_mood == VendorMood.NEUTRAL
 
     async def test_returns_valid_ai_decision(self) -> None:
@@ -120,9 +117,7 @@ class TestMockLLMService:
         for text in ["namaste", "kitne ka", "nahi", "theek", "", "random text"]:
             decision = await self.llm.generate_decision("system", text)
             assert isinstance(decision, AIDecision)
-            assert 0 <= decision.new_mood <= 100
-            assert 0 <= decision.vendor_happiness <= 100
-            assert 0 <= decision.vendor_patience <= 100
+            assert 0 <= decision.happiness_score <= 100
 
     async def test_simulates_latency(self) -> None:
         """Mock should take ~200ms to simulate real API latency."""
@@ -158,12 +153,9 @@ class TestMockSessionStore:
     async def test_create_session_returns_defaults(self) -> None:
         state = await self.store.create_session("sess-1")
         assert state["session_id"] == "sess-1"
-        assert state["vendor_happiness"] == 50
-        assert state["vendor_patience"] == 70
-        assert state["negotiation_stage"] == "GREETING"
-        assert state["current_price"] == 0
+        assert state["happiness_score"] == 50
+        assert state["negotiation_state"] == "GREETING"
         assert state["turn_count"] == 0
-        assert state["price_history"] == []
 
     async def test_load_nonexistent_returns_none(self) -> None:
         result = await self.store.load_session("no-such-session")
@@ -179,19 +171,16 @@ class TestMockSessionStore:
         await self.store.create_session("sess-3")
         updated = {
             "session_id": "sess-3",
-            "vendor_happiness": 75,
-            "vendor_patience": 60,
-            "negotiation_stage": "HAGGLING",
-            "current_price": 800,
+            "happiness_score": 75,
+            "negotiation_state": "HAGGLING",
             "turn_count": 3,
-            "price_history": [1000, 900, 800],
         }
         await self.store.save_session("sess-3", updated)
         loaded = await self.store.load_session("sess-3")
         assert loaded is not None
-        assert loaded["vendor_happiness"] == 75
-        assert loaded["negotiation_stage"] == "HAGGLING"
-        assert loaded["price_history"] == [1000, 900, 800]
+        assert loaded["happiness_score"] == 75
+        assert loaded["negotiation_state"] == "HAGGLING"
+        assert loaded["turn_count"] == 3
 
     async def test_sessions_are_isolated(self) -> None:
         await self.store.create_session("a")
@@ -199,23 +188,23 @@ class TestMockSessionStore:
 
         state_a = await self.store.load_session("a")
         assert state_a is not None
-        state_a["vendor_happiness"] = 99
+        state_a["happiness_score"] = 99
         await self.store.save_session("a", state_a)
 
         state_b = await self.store.load_session("b")
         assert state_b is not None
-        assert state_b["vendor_happiness"] == 50  # unchanged
+        assert state_b["happiness_score"] == 50  # unchanged
 
     async def test_load_returns_copy(self) -> None:
         """Modifying a loaded state should not affect the store."""
         await self.store.create_session("copy-test")
         loaded = await self.store.load_session("copy-test")
         assert loaded is not None
-        loaded["vendor_happiness"] = 999
+        loaded["happiness_score"] = 999
 
         reloaded = await self.store.load_session("copy-test")
         assert reloaded is not None
-        assert reloaded["vendor_happiness"] == 50  # original untouched
+        assert reloaded["happiness_score"] == 50  # original untouched
 
     async def test_create_returns_copy(self) -> None:
         """Modifying the returned state should not affect the store."""
@@ -339,15 +328,11 @@ class TestGenerateEndToEnd:
     def _scene(self, **overrides: object) -> dict:
         """Build a valid scene_context dict with optional overrides."""
         base = {
-            "items_in_hand": ["brass_keychain"],
-            "looking_at": "silk_scarf",
-            "distance_to_vendor": 1.2,
-            "vendor_npc_id": "vendor_01",
-            "vendor_happiness": 55,
-            "vendor_patience": 70,
-            "negotiation_stage": "BROWSING",
-            "current_price": 0,
-            "user_offer": 0,
+            "object_grabbed": "silk_scarf",
+            "happiness_score": 55,
+            "negotiation_state": "INQUIRY",
+            "input_language": "en-IN",
+            "target_language": "en-IN",
         }
         base.update(overrides)
         return base
@@ -360,27 +345,24 @@ class TestGenerateEndToEnd:
             transcribed_text="Namaste bhaiya!",
             context_block="",
             rag_context="",
-            scene_context=self._scene(negotiation_stage="GREETING"),
+            scene_context=self._scene(negotiation_state="GREETING"),
             session_id="test-greeting",
         )
         assert isinstance(result, dict)
         # Mock returns GREETING for namaste; same-stage is always legal
-        assert result["new_stage"] == "GREETING"
-        assert result["vendor_mood"] in ("enthusiastic", "neutral")
+        assert result["negotiation_state"] == "GREETING"
+        assert result["vendor_mood"] in ("friendly", "neutral")
         assert len(result["reply_text"]) > 0
 
     async def test_haggling_flow(self) -> None:
         from app.generate import generate_vendor_response
 
-        # Pre-populate the session at BROWSING so BROWSING → HAGGLING is legal
+        # Pre-populate the session at INQUIRY so INQUIRY → HAGGLING is legal
         await self.store.create_session("test-haggling")
         await self.store.save_session("test-haggling", {
-            "vendor_happiness": 55,
-            "vendor_patience": 70,
-            "negotiation_stage": "BROWSING",
-            "current_price": 0,
+            "happiness_score": 55,
+            "negotiation_state": "INQUIRY",
             "turn_count": 1,
-            "price_history": [],
         })
 
         result = await generate_vendor_response(
@@ -390,9 +372,8 @@ class TestGenerateEndToEnd:
             scene_context=self._scene(),
             session_id="test-haggling",
         )
-        assert result["new_stage"] == "HAGGLING"
-        assert result["price_offered"] == 800
-        assert 0 <= result["new_mood"] <= 100
+        assert result["negotiation_state"] == "INQUIRY"
+        assert 0 <= result["happiness_score"] <= 100
 
     async def test_walkaway_flow(self) -> None:
         from app.generate import generate_vendor_response
@@ -400,22 +381,19 @@ class TestGenerateEndToEnd:
         # Pre-populate the session at HAGGLING so HAGGLING → WALKAWAY is legal
         await self.store.create_session("test-walkaway")
         await self.store.save_session("test-walkaway", {
-            "vendor_happiness": 50,
-            "vendor_patience": 60,
-            "negotiation_stage": "HAGGLING",
-            "current_price": 800,
+            "happiness_score": 50,
+            "negotiation_state": "HAGGLING",
             "turn_count": 3,
-            "price_history": [800],
         })
 
         result = await generate_vendor_response(
             transcribed_text="Nahi bhai, bahut mehnga hai",
             context_block="",
             rag_context="",
-            scene_context=self._scene(negotiation_stage="HAGGLING"),
+            scene_context=self._scene(negotiation_state="HAGGLING"),
             session_id="test-walkaway",
         )
-        assert result["new_stage"] == "WALKAWAY"
+        assert result["negotiation_state"] == "WALKAWAY"
         assert result["vendor_mood"] in ("annoyed", "neutral")
 
     async def test_deal_flow(self) -> None:
@@ -424,23 +402,22 @@ class TestGenerateEndToEnd:
         # Pre-populate the session at HAGGLING so HAGGLING → DEAL is legal
         await self.store.create_session("test-deal")
         await self.store.save_session("test-deal", {
-            "vendor_happiness": 60,
-            "vendor_patience": 65,
-            "negotiation_stage": "HAGGLING",
-            "current_price": 500,
+            "happiness_score": 60,
+            "negotiation_state": "HAGGLING",
             "turn_count": 5,
-            "price_history": [800, 600, 500],
         })
 
         result = await generate_vendor_response(
             transcribed_text="Theek hai pakka deal!",
             context_block="",
             rag_context="",
-            scene_context=self._scene(negotiation_stage="HAGGLING", current_price=500),
+            scene_context=self._scene(negotiation_state="HAGGLING"),
             session_id="test-deal",
         )
-        assert result["new_stage"] == "DEAL"
-        assert result["vendor_mood"] == "enthusiastic"
+        assert result["negotiation_state"] == "DEAL"
+        # Mock returns happiness_score=85 but state engine clamps
+        # delta ±15 from session's 60 → 75, which maps to "friendly"
+        assert result["vendor_mood"] == "friendly"
 
     async def test_empty_input_flow(self) -> None:
         from app.generate import generate_vendor_response
@@ -452,7 +429,7 @@ class TestGenerateEndToEnd:
             scene_context=self._scene(),
             session_id="test-empty",
         )
-        assert result["new_stage"] == "BROWSING"
+        assert result["negotiation_state"] == "GREETING"
         assert result["vendor_mood"] == "neutral"
 
     async def test_result_is_valid_vendor_response(self) -> None:
@@ -463,12 +440,12 @@ class TestGenerateEndToEnd:
             transcribed_text="Hello vendor",
             context_block="",
             rag_context="",
-            scene_context=self._scene(negotiation_stage="GREETING"),
+            scene_context=self._scene(negotiation_state="GREETING"),
             session_id="test-valid",
         )
         vr = VendorResponse.model_validate(result)
         assert vr.reply_text == result["reply_text"]
-        assert vr.new_mood == result["new_mood"]
+        assert vr.happiness_score == result["happiness_score"]
 
     async def test_session_state_persisted(self) -> None:
         """After a call, session state should be saved in the store."""
@@ -478,7 +455,7 @@ class TestGenerateEndToEnd:
             transcribed_text="Namaste!",
             context_block="",
             rag_context="",
-            scene_context=self._scene(negotiation_stage="GREETING"),
+            scene_context=self._scene(negotiation_state="GREETING"),
             session_id="persist-test",
         )
         state = await self.store.load_session("persist-test")
@@ -490,7 +467,7 @@ class TestGenerateEndToEnd:
         """Multiple calls should increment turn_count."""
         from app.generate import generate_vendor_response
 
-        scene = self._scene(negotiation_stage="GREETING")
+        scene = self._scene(negotiation_state="GREETING")
         for i in range(3):
             await generate_vendor_response(
                 transcribed_text="Namaste!",
@@ -503,21 +480,6 @@ class TestGenerateEndToEnd:
         assert state is not None
         assert state["turn_count"] == 3
 
-    async def test_price_history_tracked(self) -> None:
-        """When a price is offered, it should be appended to price_history."""
-        from app.generate import generate_vendor_response
-
-        await generate_vendor_response(
-            transcribed_text="Kitne ka hai?",
-            context_block="",
-            rag_context="",
-            scene_context=self._scene(),
-            session_id="price-history-test",
-        )
-        state = await self.store.load_session("price-history-test")
-        assert state is not None
-        assert 800 in state.get("price_history", [])
-
     async def test_empty_rag_context_works(self) -> None:
         """rag_context="" is a soft failure — function works fine."""
         from app.generate import generate_vendor_response
@@ -526,7 +488,7 @@ class TestGenerateEndToEnd:
             transcribed_text="Hello",
             context_block="some history",
             rag_context="",
-            scene_context=self._scene(negotiation_stage="GREETING"),
+            scene_context=self._scene(negotiation_state="GREETING"),
             session_id="no-rag-test",
         )
         assert isinstance(result, dict)
@@ -545,11 +507,8 @@ class TestGenerateEndToEnd:
         )
         expected_keys = {
             "reply_text",
-            "new_mood",
-            "new_stage",
-            "price_offered",
-            "vendor_happiness",
-            "vendor_patience",
+            "happiness_score",
+            "negotiation_state",
             "vendor_mood",
         }
         assert set(result.keys()) == expected_keys

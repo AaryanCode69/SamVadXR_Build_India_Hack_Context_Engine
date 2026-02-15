@@ -32,11 +32,11 @@ class MockLLMService:
 
     Keyword routing (checked in order):
         - "namaste" / "hello"     → GREETING response
-        - "kitne" / "price" / "cost" → HAGGLING response with price
+        - "kitne" / "price" / "cost" → INQUIRY response
         - "nahi" / "no" / "chhodo" → WALKAWAY response
         - "theek" / "deal" / "done" → DEAL response
         - (empty string)          → vendor prompts the user
-        - (default)               → neutral BROWSING response
+        - (default)               → neutral GREETING response
 
     Simulates ~200ms latency via asyncio.sleep.
     """
@@ -61,13 +61,11 @@ class MockLLMService:
         #   <speech>
         #   --- END USER MESSAGE ---
         # Extract only the user's speech for keyword matching to avoid false
-        # positives from context/scene fields (e.g. "price=0" triggering HAGGLING).
+        # positives from context/scene fields.
         if "--- user message ---" in text_lower:
-            # New Phase 4 format: delimited sections
             after_marker = text_lower.split("--- user message ---", 1)[1]
             speech = after_marker.split("--- end user message ---", 1)[0].strip()
         elif "user says:" in text_lower:
-            # Legacy Phase 2-3 format: "User says: <speech>\nContext: ..."
             speech = text_lower.split("user says:", 1)[1].split("\n", 1)[0].strip()
         else:
             speech = text_lower
@@ -81,35 +79,26 @@ class MockLLMService:
         if any(kw in speech for kw in ("namaste", "hello", "namaskar")):
             return AIDecision(
                 reply_text="Namaste ji! Aao aao, dekho kya kya hai humare paas!",
-                new_mood=55,
-                new_stage=NegotiationStage.GREETING,
-                price_offered=None,
-                vendor_happiness=55,
-                vendor_patience=70,
-                vendor_mood=VendorMood.ENTHUSIASTIC,
+                happiness_score=55,
+                negotiation_state=NegotiationStage.GREETING,
+                vendor_mood=VendorMood.FRIENDLY,
                 internal_reasoning="[MOCK] User greeted → greeting response",
             )
 
         if any(kw in speech for kw in ("kitne", "price", "cost", "kidhar", "कितने")):
             return AIDecision(
-                reply_text="Arey bhai, ye pure Banarasi silk hai! ₹800 lagega, lekin aapke liye special price!",
-                new_mood=60,
-                new_stage=NegotiationStage.HAGGLING,
-                price_offered=800,
-                vendor_happiness=60,
-                vendor_patience=65,
-                vendor_mood=VendorMood.ENTHUSIASTIC,
-                internal_reasoning="[MOCK] User asked price → haggling response",
+                reply_text="Arey bhai, ye toh sabse fresh hai! ₹60 kilo, special price!",
+                happiness_score=65,
+                negotiation_state=NegotiationStage.INQUIRY,
+                vendor_mood=VendorMood.FRIENDLY,
+                internal_reasoning="[MOCK] User asked price → inquiry response",
             )
 
         if any(kw in speech for kw in ("nahi", "no", "chhodo", "chalo", "bahut")):
             return AIDecision(
                 reply_text="Arey ruko ruko! Itna bhi nahi bolna tha, thoda aur suno!",
-                new_mood=35,
-                new_stage=NegotiationStage.WALKAWAY,
-                price_offered=None,
-                vendor_happiness=35,
-                vendor_patience=40,
+                happiness_score=35,
+                negotiation_state=NegotiationStage.WALKAWAY,
                 vendor_mood=VendorMood.ANNOYED,
                 internal_reasoning="[MOCK] User rejecting → walkaway response",
             )
@@ -117,11 +106,8 @@ class MockLLMService:
         if any(kw in speech for kw in ("theek", "deal", "done", "pakka", "le lo")):
             return AIDecision(
                 reply_text="Bahut badhiya! Deal pakki! Aap bahut acche customer ho!",
-                new_mood=85,
-                new_stage=NegotiationStage.DEAL,
-                price_offered=500,
-                vendor_happiness=85,
-                vendor_patience=90,
+                happiness_score=85,
+                negotiation_state=NegotiationStage.DEAL,
                 vendor_mood=VendorMood.ENTHUSIASTIC,
                 internal_reasoning="[MOCK] User agreed → deal response",
             )
@@ -129,25 +115,19 @@ class MockLLMService:
         if not speech.strip():
             return AIDecision(
                 reply_text="Kuch bola kya? Arey bhai, yaha aao, dikhata hoon!",
-                new_mood=50,
-                new_stage=NegotiationStage.BROWSING,
-                price_offered=None,
-                vendor_happiness=50,
-                vendor_patience=60,
+                happiness_score=50,
+                negotiation_state=NegotiationStage.GREETING,
                 vendor_mood=VendorMood.NEUTRAL,
                 internal_reasoning="[MOCK] Empty input → vendor prompts user",
             )
 
-        # Default: neutral browsing response
+        # Default: neutral greeting response
         return AIDecision(
             reply_text="Haan ji, bahut accha choice hai! Aur kuch dekhna hai?",
-            new_mood=50,
-            new_stage=NegotiationStage.BROWSING,
-            price_offered=None,
-            vendor_happiness=50,
-            vendor_patience=70,
+            happiness_score=50,
+            negotiation_state=NegotiationStage.GREETING,
             vendor_mood=VendorMood.NEUTRAL,
-            internal_reasoning="[MOCK] Default → browsing response",
+            internal_reasoning="[MOCK] Default → greeting response",
         )
 
 
@@ -157,12 +137,9 @@ class MockLLMService:
 
 # Default initial state for a new session
 _DEFAULT_SESSION_STATE: dict[str, Any] = {
-    "vendor_happiness": 50,
-    "vendor_patience": 70,
-    "negotiation_stage": NegotiationStage.GREETING.value,
-    "current_price": 0,
+    "happiness_score": 50,
+    "negotiation_state": NegotiationStage.GREETING.value,
     "turn_count": 0,
-    "price_history": [],
 }
 
 
@@ -180,8 +157,6 @@ class MockSessionStore:
     async def create_session(self, session_id: str) -> dict[str, Any]:
         """Create a new session with default initial state."""
         state = {"session_id": session_id, **_DEFAULT_SESSION_STATE}
-        # Deep-copy price_history so sessions don't share the same list
-        state["price_history"] = []
         self._sessions[session_id] = state
         logger.info(
             "MockSessionStore: session created",

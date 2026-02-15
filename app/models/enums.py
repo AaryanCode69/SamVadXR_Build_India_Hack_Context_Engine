@@ -12,16 +12,16 @@ class NegotiationStage(str, Enum):
     """Finite stages of the vendor–buyer negotiation.
 
     Transition graph (see rules.md §5.1):
-        GREETING  → BROWSING
-        BROWSING  → HAGGLING | WALKAWAY
+        GREETING  → INQUIRY
+        INQUIRY   → HAGGLING | WALKAWAY
         HAGGLING  → DEAL | WALKAWAY | CLOSURE
-        WALKAWAY  → HAGGLING (only if vendor_happiness > 40) | CLOSURE
+        WALKAWAY  → HAGGLING (only if happiness_score > 40) | CLOSURE
 
     Terminal states: DEAL, CLOSURE
     """
 
     GREETING = "GREETING"
-    BROWSING = "BROWSING"
+    INQUIRY = "INQUIRY"
     HAGGLING = "HAGGLING"
     DEAL = "DEAL"
     WALKAWAY = "WALKAWAY"
@@ -31,14 +31,16 @@ class NegotiationStage(str, Enum):
 class VendorMood(str, Enum):
     """Categorical mood descriptor returned alongside numeric scores.
 
-    Derived from vendor_happiness:
+    Derived from happiness_score:
         0-25   → angry
-        26-45  → annoyed
-        46-70  → neutral
-        71-100 → enthusiastic
+        26-40  → annoyed
+        41-60  → neutral
+        61-80  → friendly
+        81-100 → enthusiastic
     """
 
     ENTHUSIASTIC = "enthusiastic"
+    FRIENDLY = "friendly"
     NEUTRAL = "neutral"
     ANNOYED = "annoyed"
     ANGRY = "angry"
@@ -58,8 +60,8 @@ class LanguageCode(str, Enum):
 # Single source of truth — used by state_engine.py
 # Key = current stage, Value = set of valid next stages
 LEGAL_TRANSITIONS: dict[NegotiationStage, set[NegotiationStage]] = {
-    NegotiationStage.GREETING: {NegotiationStage.BROWSING},
-    NegotiationStage.BROWSING: {NegotiationStage.HAGGLING, NegotiationStage.WALKAWAY},
+    NegotiationStage.GREETING: {NegotiationStage.INQUIRY},
+    NegotiationStage.INQUIRY: {NegotiationStage.HAGGLING, NegotiationStage.WALKAWAY},
     NegotiationStage.HAGGLING: {
         NegotiationStage.DEAL,
         NegotiationStage.WALKAWAY,

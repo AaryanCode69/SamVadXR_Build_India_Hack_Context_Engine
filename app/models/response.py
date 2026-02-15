@@ -7,8 +7,6 @@ VendorResponse — validated output returned to Dev B as a plain dict.
 
 from __future__ import annotations
 
-from typing import Optional
-
 from pydantic import BaseModel, Field, field_validator
 
 from app.models.enums import (
@@ -32,36 +30,19 @@ class AIDecision(BaseModel):
         min_length=1,
         description="What the vendor NPC says (native-script string).",
     )
-    new_mood: int = Field(
+    happiness_score: int = Field(
         ...,
         ge=MOOD_MIN,
         le=MOOD_MAX,
-        description="Proposed mood after this turn (0-100).",
+        description="Proposed happiness score after this turn (0-100).",
     )
-    new_stage: NegotiationStage = Field(
+    negotiation_state: NegotiationStage = Field(
         ...,
         description="Proposed negotiation stage after this turn.",
     )
-    price_offered: Optional[int] = Field(
-        default=None,
-        ge=0,
-        description="Price the vendor is quoting. None if not quoting.",
-    )
-    vendor_happiness: int = Field(
-        ...,
-        ge=MOOD_MIN,
-        le=MOOD_MAX,
-        description="Proposed vendor happiness (0-100).",
-    )
-    vendor_patience: int = Field(
-        ...,
-        ge=MOOD_MIN,
-        le=MOOD_MAX,
-        description="Proposed vendor patience (0-100).",
-    )
     vendor_mood: VendorMood = Field(
         ...,
-        description="Categorical mood: enthusiastic|neutral|annoyed|angry.",
+        description="Categorical mood: enthusiastic|friendly|neutral|annoyed|angry.",
     )
     internal_reasoning: str = Field(
         default="",
@@ -70,7 +51,7 @@ class AIDecision(BaseModel):
 
     # ── Validators ────────────────────────────────────────
 
-    @field_validator("new_mood", "vendor_happiness", "vendor_patience", mode="before")
+    @field_validator("happiness_score", mode="before")
     @classmethod
     def clamp_score(cls, v: int) -> int:
         """Clamp numeric scores to [0, 100]."""
@@ -94,42 +75,25 @@ class VendorResponse(BaseModel):
         min_length=1,
         description="Vendor's spoken response (native-script string).",
     )
-    new_mood: int = Field(
+    happiness_score: int = Field(
         ...,
         ge=MOOD_MIN,
         le=MOOD_MAX,
-        description="Validated mood (0-100, clamped ±15 from previous).",
+        description="Validated happiness score (0-100, clamped ±15 from previous).",
     )
-    new_stage: str = Field(
+    negotiation_state: str = Field(
         ...,
-        description="GREETING|BROWSING|HAGGLING|DEAL|WALKAWAY|CLOSURE",
-    )
-    price_offered: int = Field(
-        ...,
-        ge=0,
-        description="Vendor's current asking price (0 if not quoting).",
-    )
-    vendor_happiness: int = Field(
-        ...,
-        ge=MOOD_MIN,
-        le=MOOD_MAX,
-        description="Vendor happiness (0-100).",
-    )
-    vendor_patience: int = Field(
-        ...,
-        ge=MOOD_MIN,
-        le=MOOD_MAX,
-        description="Vendor patience (0-100).",
+        description="GREETING|INQUIRY|HAGGLING|DEAL|WALKAWAY|CLOSURE",
     )
     vendor_mood: str = Field(
         ...,
-        description="enthusiastic|neutral|annoyed|angry",
+        description="enthusiastic|friendly|neutral|annoyed|angry",
     )
 
-    @field_validator("new_stage")
+    @field_validator("negotiation_state")
     @classmethod
     def validate_stage(cls, v: str) -> str:
-        """Ensure new_stage is a valid NegotiationStage value."""
+        """Ensure negotiation_state is a valid NegotiationStage value."""
         valid = {s.value for s in NegotiationStage}
         if v not in valid:
             raise ValueError(f"Invalid stage '{v}'. Must be one of {valid}")

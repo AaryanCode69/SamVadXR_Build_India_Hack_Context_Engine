@@ -41,7 +41,7 @@ Step  Owner   Module              Action                                        
 **Dev B owns 9 of the 11 steps.** Dev A provides a single function (Steps 7 + 7½) that Dev B calls.
 
 > **Note on Neo4j (Steps 7 & 7½):** Dev A uses Neo4j as the persistent state store for session game
-> state (mood, stage, turn count, price history). This is entirely Dev A's domain — Dev B never
+> state (happiness, stage, turn count). This is entirely Dev A's domain — Dev B never
 > interacts with Neo4j directly. Dev B's conversation memory (`context_memory.py`) handles dialogue
 > history; Dev A's Neo4j graph handles game logic state.
 
@@ -82,12 +82,9 @@ result = await generate_vendor_response(
 ```python
 {
     "reply_text": str,          # Vendor's spoken response
-    "new_mood": int,            # Validated mood (0-100, clamped ±15)
-    "new_stage": str,           # "GREETING"|"BROWSING"|"HAGGLING"|"DEAL"|"WALKAWAY"|"CLOSURE"
-    "price_offered": int,       # Vendor's current asking price
-    "vendor_happiness": int,    # 0-100
-    "vendor_patience": int,     # 0-100
-    "vendor_mood": str          # "enthusiastic"|"neutral"|"annoyed"|"angry"
+    "happiness_score": int,     # Validated happiness (0-100, clamped ±15)
+    "negotiation_state": str,   # "GREETING"|"INQUIRY"|"HAGGLING"|"DEAL"|"WALKAWAY"|"CLOSURE"
+    "vendor_mood": str          # "enthusiastic"|"friendly"|"neutral"|"annoyed"|"angry"
 }
 ```
 
@@ -97,20 +94,16 @@ Dev B forwards the `scene_context` dict from Unity unchanged:
 
 ```python
 {
-    "items_in_hand": ["brass_keychain"],     # List of items user holds
-    "looking_at": "silk_scarf",              # Gaze-tracked item
-    "distance_to_vendor": 1.2,              # Physical proximity
-    "vendor_npc_id": "vendor_01",           # Which vendor NPC
-    "vendor_happiness": 55,                  # 0-100
-    "vendor_patience": 70,                   # 0-100
-    "negotiation_stage": "BROWSING",        # Current stage from Unity
-    "current_price": 0,                      # Last quoted price
-    "user_offer": 0                          # User's latest offer
+    "object_grabbed": "Tomato",              # Item user is interacting with (or null)
+    "happiness_score": 50,                    # Vendor happiness 0-100
+    "negotiation_state": "GREETING",          # Current negotiation stage
+    "input_language": "en-IN",                # Language the user is speaking
+    "target_language": "en-IN"                # Language the vendor should reply in
 }
 ```
 
 > **Note:** Dev A's Neo4j state is authoritative. The `scene_context` values from Unity are treated
-> as supplementary context (e.g., `items_in_hand`, `looking_at`, `distance_to_vendor`), but mood/stage
+> as supplementary context (e.g., `object_grabbed`), but happiness/stage
 > authority comes from Neo4j.
 
 ### 2.3 Exception Classes
@@ -222,10 +215,9 @@ async def interact(request: InteractRequest) -> InteractResponse:
 
     # Step 8 — Store vendor turn
     memory.add_turn("vendor", result["reply_text"], {
-        "vendor_happiness": result["vendor_happiness"],
-        "vendor_patience": result["vendor_patience"],
-        "stage": result["new_stage"],
-        "price": result["price_offered"]
+        "happiness_score": result["happiness_score"],
+        "stage": result["negotiation_state"],
+        "vendor_mood": result["vendor_mood"]
     })
 
     # Step 9 — Text-to-Speech
@@ -257,8 +249,8 @@ async def interact(request: InteractRequest) -> InteractResponse:
 | `context_block` | Dev B (Step 5) | Dev A (via arg) | Multi-line text string |
 | `rag_context` | Dev B (Step 6) | Dev A (via arg) | Multi-line text string |
 | `reply_text` | Dev A (Step 7) | Dev B (Steps 8, 9, 11) | Native script string |
-| `new_mood / stage / price` | Dev A (Step 7, validated 7½) | Dev B (Steps 8, 11) | Dict fields |
-| `vendor_happiness / patience / mood` | Dev A (Step 7) | Dev B (Steps 8, 11) | Dict fields |
+| `happiness_score / negotiation_state` | Dev A (Step 7, validated 7½) | Dev B (Steps 8, 11) | Dict fields |
+| `vendor_mood` | Dev A (Step 7) | Dev B (Steps 8, 11) | Dict field |
 | `audio_base64` (output) | Dev B (Step 10) | Unity (Step 11) | Base64 string |
 
 ---

@@ -7,14 +7,19 @@ If a required variable is missing, the app fails fast with a clear error.
 Architecture v3.0: Dev A owns AI + State only. STT/TTS/RAG config belongs to Dev B.
 """
 
+from pathlib import Path
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Resolve .env relative to project root (one level above app/)
+_ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
 
 
 class Settings(BaseSettings):
     """All configuration for Dev A's AI brain and state engine."""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=str(_ENV_FILE),
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",  # ignore Dev B's vars (SARVAM_API_KEY, etc.) in shared .env

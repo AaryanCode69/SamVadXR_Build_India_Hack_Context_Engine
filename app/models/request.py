@@ -11,66 +11,45 @@ from typing import Optional
 
 from pydantic import BaseModel, Field, field_validator
 
-from app.models.enums import MOOD_MAX, MOOD_MIN, NegotiationStage
+from app.models.enums import MOOD_MAX, MOOD_MIN, LanguageCode, NegotiationStage
 
 
 class SceneContext(BaseModel):
     """Game state snapshot forwarded from Unity via Dev B's scene_context dict.
 
-    All numeric scores (vendor_happiness, vendor_patience) are clamped to
-    [0, 100] on ingestion so downstream logic never sees out-of-range values.
+    The happiness_score is clamped to [0, 100] on ingestion so downstream
+    logic never sees out-of-range values.
     """
 
-    items_in_hand: list[str] = Field(
-        default_factory=list,
-        description="Items the user is currently holding in VR.",
-    )
-    looking_at: Optional[str] = Field(
+    object_grabbed: Optional[str] = Field(
         default=None,
-        description="Item the user's gaze is focused on (gaze-tracked).",
+        description="Item the user has grabbed / is interacting with.",
     )
-    distance_to_vendor: float = Field(
-        default=1.0,
-        ge=0.0,
-        description="Physical proximity to the vendor NPC (metres).",
-    )
-    vendor_npc_id: str = Field(
-        default="vendor_01",
-        description="Identifier for which vendor NPC the user is interacting with.",
-    )
-    vendor_happiness: int = Field(
+    happiness_score: int = Field(
         default=50,
         ge=MOOD_MIN,
         le=MOOD_MAX,
         description="Vendor happiness score (0-100) from Unity.",
     )
-    vendor_patience: int = Field(
-        default=70,
-        ge=MOOD_MIN,
-        le=MOOD_MAX,
-        description="Vendor patience score (0-100) from Unity.",
-    )
-    negotiation_stage: NegotiationStage = Field(
-        default=NegotiationStage.BROWSING,
+    negotiation_state: NegotiationStage = Field(
+        default=NegotiationStage.GREETING,
         description="Current negotiation stage reported by Unity.",
     )
-    current_price: int = Field(
-        default=0,
-        ge=0,
-        description="Vendor's current asking price.",
+    input_language: LanguageCode = Field(
+        default=LanguageCode.EN_IN,
+        description="Language the user is speaking.",
     )
-    user_offer: int = Field(
-        default=0,
-        ge=0,
-        description="User's latest counter-offer.",
+    target_language: LanguageCode = Field(
+        default=LanguageCode.EN_IN,
+        description="Language the vendor should reply in.",
     )
 
     # ── Validators ────────────────────────────────────────
 
-    @field_validator("vendor_happiness", "vendor_patience", mode="before")
+    @field_validator("happiness_score", mode="before")
     @classmethod
     def clamp_score(cls, v: int) -> int:
-        """Clamp happiness/patience scores to [0, 100] even if Unity sends garbage."""
+        """Clamp happiness score to [0, 100] even if Unity sends garbage."""
         if isinstance(v, (int, float)):
             return max(MOOD_MIN, min(MOOD_MAX, int(v)))
         return v  # let Pydantic's type check handle non-numeric

@@ -35,15 +35,11 @@ from app.services.mocks import MockLLMService, MockSessionStore
 def _scene(**overrides: object) -> dict[str, Any]:
     """Build a valid scene_context dict with optional overrides."""
     base: dict[str, Any] = {
-        "items_in_hand": ["brass_keychain"],
-        "looking_at": "silk_scarf",
-        "distance_to_vendor": 1.2,
-        "vendor_npc_id": "vendor_01",
-        "vendor_happiness": 55,
-        "vendor_patience": 70,
-        "negotiation_stage": "BROWSING",
-        "current_price": 0,
-        "user_offer": 0,
+        "object_grabbed": "silk_scarf",
+        "happiness_score": 55,
+        "negotiation_state": "INQUIRY",
+        "input_language": "en-IN",
+        "target_language": "en-IN",
     }
     base.update(overrides)
     return base
@@ -67,26 +63,23 @@ class TestFunctionContract:
             transcribed_text="Namaste!",
             context_block="",
             rag_context="",
-            scene_context=_scene(negotiation_stage="GREETING"),
+            scene_context=_scene(negotiation_state="GREETING"),
             session_id="contract-1",
         )
         assert isinstance(result, dict)
 
-    async def test_has_all_seven_keys(self) -> None:
+    async def test_has_all_four_keys(self) -> None:
         result = await generate_vendor_response(
             transcribed_text="Hello vendor",
             context_block="",
             rag_context="",
-            scene_context=_scene(negotiation_stage="GREETING"),
+            scene_context=_scene(negotiation_state="GREETING"),
             session_id="contract-2",
         )
         expected = {
             "reply_text",
-            "new_mood",
-            "new_stage",
-            "price_offered",
-            "vendor_happiness",
-            "vendor_patience",
+            "happiness_score",
+            "negotiation_state",
             "vendor_mood",
         }
         assert set(result.keys()) == expected
@@ -96,7 +89,7 @@ class TestFunctionContract:
             transcribed_text="Namaste!",
             context_block="",
             rag_context="",
-            scene_context=_scene(negotiation_stage="GREETING"),
+            scene_context=_scene(negotiation_state="GREETING"),
             session_id="contract-3",
         )
         vr = VendorResponse.model_validate(result)
@@ -116,7 +109,7 @@ class TestFunctionContract:
             transcribed_text="Namaste!",
             context_block="some history",
             rag_context="",
-            scene_context=_scene(negotiation_stage="GREETING"),
+            scene_context=_scene(negotiation_state="GREETING"),
             session_id="no-rag",
         )
         assert result["reply_text"]
@@ -127,7 +120,7 @@ class TestFunctionContract:
             transcribed_text="Hello!",
             context_block="",
             rag_context="",
-            scene_context=_scene(negotiation_stage="GREETING"),
+            scene_context=_scene(negotiation_state="GREETING"),
             session_id="no-ctx",
         )
         assert result["reply_text"]
@@ -152,42 +145,42 @@ class TestTerminalStates:
         await self.store.create_session("deal-done")
         state = await self.store.load_session("deal-done")
         assert state is not None
-        state["negotiation_stage"] = "DEAL"
-        state["vendor_happiness"] = 80
+        state["negotiation_state"] = "DEAL"
+        state["happiness_score"] = 80
         await self.store.save_session("deal-done", state)
 
         result = await generate_vendor_response(
             transcribed_text="Aur kuch chahiye?",
             context_block="",
             rag_context="",
-            scene_context=_scene(negotiation_stage="DEAL"),
+            scene_context=_scene(negotiation_state="DEAL"),
             session_id="deal-done",
         )
-        assert result["new_stage"] == "DEAL"
+        assert result["negotiation_state"] == "DEAL"
         assert "khatam" in result["reply_text"].lower()
 
     async def test_closure_returns_closure_reply(self) -> None:
         await self.store.create_session("closed")
         state = await self.store.load_session("closed")
         assert state is not None
-        state["negotiation_stage"] = "CLOSURE"
+        state["negotiation_state"] = "CLOSURE"
         await self.store.save_session("closed", state)
 
         result = await generate_vendor_response(
             transcribed_text="Phir baat karo",
             context_block="",
             rag_context="",
-            scene_context=_scene(negotiation_stage="CLOSURE"),
+            scene_context=_scene(negotiation_state="CLOSURE"),
             session_id="closed",
         )
-        assert result["new_stage"] == "CLOSURE"
+        assert result["negotiation_state"] == "CLOSURE"
 
     async def test_terminal_state_does_not_call_llm(self) -> None:
         """When session is terminal, LLM is never invoked."""
         await self.store.create_session("skip-llm")
         state = await self.store.load_session("skip-llm")
         assert state is not None
-        state["negotiation_stage"] = "DEAL"
+        state["negotiation_state"] = "DEAL"
         await self.store.save_session("skip-llm", state)
 
         # Replace LLM with a mock that would fail if called
@@ -202,10 +195,10 @@ class TestTerminalStates:
             transcribed_text="test",
             context_block="",
             rag_context="",
-            scene_context=_scene(negotiation_stage="DEAL"),
+            scene_context=_scene(negotiation_state="DEAL"),
             session_id="skip-llm",
         )
-        assert result["new_stage"] == "DEAL"
+        assert result["negotiation_state"] == "DEAL"
         failing_llm.generate_decision.assert_not_called()
 
 
@@ -228,17 +221,17 @@ class TestTurnLimits:
         state = await self.store.load_session("over-limit")
         assert state is not None
         state["turn_count"] = MAX_TURNS  # next call makes it 31
-        state["negotiation_stage"] = "HAGGLING"
+        state["negotiation_state"] = "HAGGLING"
         await self.store.save_session("over-limit", state)
 
         result = await generate_vendor_response(
             transcribed_text="Ek aur round!",
             context_block="",
             rag_context="",
-            scene_context=_scene(negotiation_stage="HAGGLING"),
+            scene_context=_scene(negotiation_state="HAGGLING"),
             session_id="over-limit",
         )
-        assert result["new_stage"] == "CLOSURE"
+        assert result["negotiation_state"] == "CLOSURE"
         assert result["vendor_mood"] == "annoyed"
 
     async def test_turn_30_still_proceeds_normally(self) -> None:
@@ -247,41 +240,41 @@ class TestTurnLimits:
         state = await self.store.load_session("at-limit")
         assert state is not None
         state["turn_count"] = MAX_TURNS - 1  # next call makes it 30
-        state["negotiation_stage"] = "BROWSING"
+        state["negotiation_state"] = "INQUIRY"
         await self.store.save_session("at-limit", state)
 
         result = await generate_vendor_response(
             transcribed_text="Namaste!",
             context_block="",
             rag_context="",
-            scene_context=_scene(negotiation_stage="BROWSING"),
+            scene_context=_scene(negotiation_state="INQUIRY"),
             session_id="at-limit",
         )
         # Should NOT be forced closure — turn 30 is the limit, not exceeded
-        assert result["new_stage"] != "CLOSURE" or True  # LLM might return anything
+        assert result["negotiation_state"] != "CLOSURE" or True  # LLM might return anything
         # The key assertion: the function ran through LLM, not short-circuited
         assert result["reply_text"] != ""
 
     async def test_forced_closure_persists(self) -> None:
-        """Forced closure updates the stored negotiation_stage."""
+        """Forced closure updates the stored negotiation_state."""
         await self.store.create_session("persist-closure")
         state = await self.store.load_session("persist-closure")
         assert state is not None
         state["turn_count"] = MAX_TURNS
-        state["negotiation_stage"] = "HAGGLING"
+        state["negotiation_state"] = "HAGGLING"
         await self.store.save_session("persist-closure", state)
 
         await generate_vendor_response(
             transcribed_text="test",
             context_block="",
             rag_context="",
-            scene_context=_scene(negotiation_stage="HAGGLING"),
+            scene_context=_scene(negotiation_state="HAGGLING"),
             session_id="persist-closure",
         )
 
         saved = await self.store.load_session("persist-closure")
         assert saved is not None
-        assert saved["negotiation_stage"] == "CLOSURE"
+        assert saved["negotiation_state"] == "CLOSURE"
 
 
 # ═══════════════════════════════════════════════════════════
@@ -304,7 +297,7 @@ class TestErrorHandling:
                 transcribed_text="Hello",
                 context_block="",
                 rag_context="",
-                scene_context={"negotiation_stage": "INVALID_STAGE"},
+                scene_context={"negotiation_state": "INVALID_STAGE"},
                 session_id="bad-scene",
             )
 
@@ -321,7 +314,7 @@ class TestErrorHandling:
                 transcribed_text="Hello",
                 context_block="",
                 rag_context="",
-                scene_context=_scene(negotiation_stage="GREETING"),
+                scene_context=_scene(negotiation_state="GREETING"),
                 session_id="llm-fail",
             )
 
@@ -338,7 +331,7 @@ class TestErrorHandling:
                 transcribed_text="Hello",
                 context_block="",
                 rag_context="",
-                scene_context=_scene(negotiation_stage="GREETING"),
+                scene_context=_scene(negotiation_state="GREETING"),
                 session_id="store-fail",
             )
 
@@ -356,7 +349,7 @@ class TestErrorHandling:
                 transcribed_text="Hello",
                 context_block="",
                 rag_context="",
-                scene_context=_scene(negotiation_stage="GREETING"),
+                scene_context=_scene(negotiation_state="GREETING"),
                 session_id="save-fail",
             )
 
@@ -373,7 +366,7 @@ class TestErrorHandling:
                 transcribed_text="Hello",
                 context_block="",
                 rag_context="",
-                scene_context=_scene(negotiation_stage="GREETING"),
+                scene_context=_scene(negotiation_state="GREETING"),
                 session_id="brain-error",
             )
 
@@ -390,7 +383,7 @@ class TestErrorHandling:
                 transcribed_text="Hello",
                 context_block="",
                 rag_context="",
-                scene_context=_scene(negotiation_stage="GREETING"),
+                scene_context=_scene(negotiation_state="GREETING"),
                 session_id="store-error",
             )
 
@@ -414,7 +407,7 @@ class TestWrapUpHint:
         state = await self.store.load_session("wrap-up")
         assert state is not None
         state["turn_count"] = 24  # next call makes it 25
-        state["negotiation_stage"] = "HAGGLING"
+        state["negotiation_state"] = "HAGGLING"
         await self.store.save_session("wrap-up", state)
 
         # Capture the system prompt sent to LLM
@@ -431,7 +424,7 @@ class TestWrapUpHint:
             transcribed_text="Thoda aur socho",
             context_block="",
             rag_context="",
-            scene_context=_scene(negotiation_stage="HAGGLING"),
+            scene_context=_scene(negotiation_state="HAGGLING"),
             session_id="wrap-up",
         )
         assert len(captured_prompts) == 1
@@ -443,7 +436,7 @@ class TestWrapUpHint:
         state = await self.store.load_session("no-wrap")
         assert state is not None
         state["turn_count"] = 9  # next call makes it 10
-        state["negotiation_stage"] = "BROWSING"
+        state["negotiation_state"] = "INQUIRY"
         await self.store.save_session("no-wrap", state)
 
         captured_prompts: list[str] = []
@@ -502,14 +495,14 @@ class TestDevEndpoint:
                 "transcribed_text": "Namaste bhaiya!",
                 "context_block": "",
                 "rag_context": "",
-                "scene_context": _scene(negotiation_stage="GREETING"),
+                "scene_context": _scene(negotiation_state="GREETING"),
                 "session_id": "dev-test-1",
             },
         )
         assert resp.status_code == 200
         data = resp.json()
         assert "reply_text" in data
-        assert "new_stage" in data
+        assert "negotiation_state" in data
         assert "vendor_mood" in data
 
     def test_dev_endpoint_default_body(self) -> None:
@@ -533,7 +526,7 @@ class TestDevEndpoint:
             "/api/dev/generate",
             json={
                 "transcribed_text": "Hello",
-                "scene_context": _scene(negotiation_stage="GREETING"),
+                "scene_context": _scene(negotiation_state="GREETING"),
                 "session_id": "dev-500",
             },
         )
@@ -553,7 +546,7 @@ class TestDevEndpoint:
             "/api/dev/generate",
             json={
                 "transcribed_text": "Hello",
-                "scene_context": _scene(negotiation_stage="GREETING"),
+                "scene_context": _scene(negotiation_state="GREETING"),
                 "session_id": "dev-503",
             },
         )
@@ -596,7 +589,7 @@ class TestSessionPersistence:
                 transcribed_text="Namaste!",
                 context_block="",
                 rag_context="",
-                scene_context=_scene(negotiation_stage="GREETING"),
+                scene_context=_scene(negotiation_state="GREETING"),
                 session_id="persist-turns",
             )
         state = await self.store.load_session("persist-turns")
@@ -613,17 +606,5 @@ class TestSessionPersistence:
         )
         state = await self.store.load_session("persist-stage")
         assert state is not None
-        assert state["negotiation_stage"] == result["new_stage"]
+        assert state["negotiation_state"] == result["negotiation_state"]
 
-    async def test_price_history_accumulated(self) -> None:
-        # First call — asks price → 800
-        await generate_vendor_response(
-            transcribed_text="Kitne ka hai?",
-            context_block="",
-            rag_context="",
-            scene_context=_scene(),
-            session_id="persist-price",
-        )
-        state = await self.store.load_session("persist-price")
-        assert state is not None
-        assert 800 in state.get("price_history", [])

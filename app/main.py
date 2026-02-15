@@ -20,10 +20,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from app.config import Settings, get_settings
-from app.exceptions import BrainServiceError, StateStoreError
-from app.logging_config import setup_logging
-from app.services.session_store import init_neo4j, close_neo4j
+from .config import Settings, get_settings
+from .exceptions import BrainServiceError, StateStoreError
+from .logging_config import setup_logging
+from .services.session_store import init_neo4j, close_neo4j
 
 # ---------------------------------------------------------------------------
 # Lifespan — runs once at startup / shutdown
@@ -175,15 +175,11 @@ def create_app() -> FastAPI:
             )
             scene_context: dict[str, Any] = Field(
                 default_factory=lambda: {
-                    "items_in_hand": [],
-                    "looking_at": None,
-                    "distance_to_vendor": 1.0,
-                    "vendor_npc_id": "vendor_01",
-                    "vendor_happiness": 50,
-                    "vendor_patience": 70,
-                    "negotiation_stage": "BROWSING",
-                    "current_price": 0,
-                    "user_offer": 0,
+                    "object_grabbed": None,
+                    "happiness_score": 50,
+                    "negotiation_state": "GREETING",
+                    "input_language": "en-IN",
+                    "target_language": "en-IN",
                 },
                 description="Game state from Unity.",
             )
@@ -200,7 +196,7 @@ def create_app() -> FastAPI:
             Returns the validated VendorResponse dict, or an error JSON
             with the appropriate HTTP status code.
             """
-            from app.generate import generate_vendor_response
+            from .generate import generate_vendor_response
 
             try:
                 result = await generate_vendor_response(

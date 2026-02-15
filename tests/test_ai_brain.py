@@ -61,15 +61,11 @@ def mock_llm() -> MockLLMService:
 def _scene(**overrides: Any) -> dict[str, Any]:
     """Build a default scene_context dict with optional overrides."""
     base = {
-        "items_in_hand": ["brass_statue"],
-        "looking_at": "silk_scarf",
-        "distance_to_vendor": 1.5,
-        "vendor_npc_id": "vendor_01",
-        "vendor_happiness": 55,
-        "vendor_patience": 70,
-        "negotiation_stage": "BROWSING",
-        "current_price": 0,
-        "user_offer": 0,
+        "object_grabbed": "silk_scarf",
+        "happiness_score": 55,
+        "negotiation_state": "INQUIRY",
+        "input_language": "en-IN",
+        "target_language": "en-IN",
     }
     base.update(overrides)
     return base
@@ -86,11 +82,8 @@ class TestBuildSystemPrompt:
     def test_contains_all_static_sections(self) -> None:
         """System prompt includes persona, rules, schema, anti-injection."""
         prompt = build_system_prompt(
-            vendor_happiness=50,
-            vendor_patience=70,
-            negotiation_stage="BROWSING",
-            current_price=0,
-            user_offer=0,
+            happiness_score=50,
+            negotiation_state="INQUIRY",
             turn_count=1,
         )
         assert "Ramesh" in prompt  # Persona
@@ -102,61 +95,34 @@ class TestBuildSystemPrompt:
     def test_dynamic_state_injected(self) -> None:
         """Current game state values appear in the prompt."""
         prompt = build_system_prompt(
-            vendor_happiness=75,
-            vendor_patience=40,
-            negotiation_stage="HAGGLING",
-            current_price=800,
-            user_offer=300,
+            happiness_score=75,
+            negotiation_state="HAGGLING",
             turn_count=5,
-            items_in_hand=["silk_scarf", "brass_keychain"],
-            looking_at="copper_bowl",
-            distance_to_vendor=2.5,
+            object_grabbed="copper_bowl",
+            input_language="hi-IN",
+            target_language="hi-IN",
         )
-        assert "vendor_happiness: 75" in prompt
-        assert "vendor_patience: 40" in prompt
-        assert "negotiation_stage: HAGGLING" in prompt
-        assert "current_price: 800" in prompt
-        assert "user_offer: 300" in prompt
+        assert "happiness_score: 75" in prompt
+        assert "negotiation_state: HAGGLING" in prompt
         assert "turn_count: 5" in prompt
-        assert "silk_scarf" in prompt
-        assert "brass_keychain" in prompt
         assert "copper_bowl" in prompt
-        assert "2.5m" in prompt
+        assert "hi-IN" in prompt
 
-    def test_empty_items_shows_nothing(self) -> None:
-        """Empty items_in_hand displays 'nothing'."""
+    def test_no_object_shows_nothing(self) -> None:
+        """None object_grabbed displays 'nothing'."""
         prompt = build_system_prompt(
-            vendor_happiness=50,
-            vendor_patience=70,
-            negotiation_stage="GREETING",
-            current_price=0,
-            user_offer=0,
+            happiness_score=50,
+            negotiation_state="GREETING",
             turn_count=1,
-            items_in_hand=[],
+            object_grabbed=None,
         )
-        assert "items_in_hand: [nothing]" in prompt
-
-    def test_no_looking_at_shows_nothing(self) -> None:
-        """None looking_at displays 'nothing in particular'."""
-        prompt = build_system_prompt(
-            vendor_happiness=50,
-            vendor_patience=70,
-            negotiation_stage="GREETING",
-            current_price=0,
-            user_offer=0,
-            turn_count=1,
-            looking_at=None,
-        )
-        assert "nothing in particular" in prompt
+        assert "object_grabbed: nothing" in prompt
 
     def test_wrap_up_instruction_added(self) -> None:
         """When wrap_up=True, the wrap-up instruction is included."""
         prompt = build_system_prompt(
-            vendor_happiness=50,
-            vendor_patience=70,
-            negotiation_stage="HAGGLING",
-            current_price=500,
-            user_offer=300,
+            happiness_score=50,
+            negotiation_state="HAGGLING",
             turn_count=26,
             wrap_up=True,
         )
@@ -166,11 +132,8 @@ class TestBuildSystemPrompt:
     def test_no_wrap_up_by_default(self) -> None:
         """Without wrap_up=True, no wrap-up instruction."""
         prompt = build_system_prompt(
-            vendor_happiness=50,
-            vendor_patience=70,
-            negotiation_stage="HAGGLING",
-            current_price=500,
-            user_offer=300,
+            happiness_score=50,
+            negotiation_state="HAGGLING",
             turn_count=5,
         )
         assert "WRAP-UP INSTRUCTION" not in prompt
@@ -178,20 +141,14 @@ class TestBuildSystemPrompt:
     def test_prompt_includes_json_schema_fields(self) -> None:
         """The output schema section lists all required AIDecision fields."""
         prompt = build_system_prompt(
-            vendor_happiness=50,
-            vendor_patience=70,
-            negotiation_stage="BROWSING",
-            current_price=0,
-            user_offer=0,
+            happiness_score=50,
+            negotiation_state="INQUIRY",
             turn_count=1,
         )
         for field in (
             "reply_text",
-            "new_mood",
-            "new_stage",
-            "price_offered",
-            "vendor_happiness",
-            "vendor_patience",
+            "happiness_score",
+            "negotiation_state",
             "vendor_mood",
             "internal_reasoning",
         ):
@@ -200,15 +157,12 @@ class TestBuildSystemPrompt:
     def test_legal_transitions_in_prompt(self) -> None:
         """Stage transition rules include all legal transitions."""
         prompt = build_system_prompt(
-            vendor_happiness=50,
-            vendor_patience=70,
-            negotiation_stage="BROWSING",
-            current_price=0,
-            user_offer=0,
+            happiness_score=50,
+            negotiation_state="INQUIRY",
             turn_count=1,
         )
         assert "GREETING" in prompt
-        assert "BROWSING" in prompt
+        assert "INQUIRY" in prompt
         assert "HAGGLING" in prompt
         assert "DEAL" in prompt
         assert "WALKAWAY" in prompt
@@ -297,11 +251,8 @@ def _valid_ai_response(**overrides: Any) -> str:
     """Build a valid AIDecision JSON string."""
     data = {
         "reply_text": "Arey bhai, ye pure Banarasi silk hai!",
-        "new_mood": 60,
-        "new_stage": "HAGGLING",
-        "price_offered": 800,
-        "vendor_happiness": 60,
-        "vendor_patience": 65,
+        "happiness_score": 60,
+        "negotiation_state": "HAGGLING",
         "vendor_mood": "enthusiastic",
         "internal_reasoning": "User asked price → moving to haggling",
     }
@@ -326,9 +277,8 @@ class TestOpenAILLMServiceParsing:
         result = OpenAILLMService._parse_response(raw)
         assert isinstance(result, AIDecision)
         assert result.reply_text == "Arey bhai, ye pure Banarasi silk hai!"
-        assert result.new_mood == 60
-        assert result.new_stage == NegotiationStage.HAGGLING
-        assert result.price_offered == 800
+        assert result.happiness_score == 60
+        assert result.negotiation_state == NegotiationStage.HAGGLING
         assert result.vendor_mood == VendorMood.ENTHUSIASTIC
 
     def test_json_with_markdown_fences(self) -> None:
@@ -336,27 +286,13 @@ class TestOpenAILLMServiceParsing:
         raw = f"```json\n{_valid_ai_response()}\n```"
         result = OpenAILLMService._parse_response(raw)
         assert isinstance(result, AIDecision)
-        assert result.new_mood == 60
+        assert result.happiness_score == 60
 
-    def test_null_price_string_handling(self) -> None:
-        """Handles 'null' as a string for price_offered."""
-        raw = _valid_ai_response(price_offered="null")
+    def test_out_of_range_happiness_clamped(self) -> None:
+        """Happiness values outside [0, 100] are clamped by Pydantic."""
+        raw = _valid_ai_response(happiness_score=150)
         result = OpenAILLMService._parse_response(raw)
-        assert result.price_offered is None
-
-    def test_none_price_string_handling(self) -> None:
-        """Handles 'None' as a string for price_offered."""
-        raw = _valid_ai_response(price_offered="None")
-        result = OpenAILLMService._parse_response(raw)
-        assert result.price_offered is None
-
-    def test_out_of_range_mood_clamped(self) -> None:
-        """Mood values outside [0, 100] are clamped by Pydantic."""
-        raw = _valid_ai_response(new_mood=150, vendor_happiness=-10, vendor_patience=200)
-        result = OpenAILLMService._parse_response(raw)
-        assert result.new_mood == 100
-        assert result.vendor_happiness == 0
-        assert result.vendor_patience == 100
+        assert result.happiness_score == 100
 
     def test_invalid_json_raises(self) -> None:
         """Malformed JSON raises json.JSONDecodeError."""
@@ -393,7 +329,7 @@ class TestOpenAILLMServiceRetry:
 
         result = await service.generate_decision("system prompt", "user msg")
         assert isinstance(result, AIDecision)
-        assert result.new_stage == NegotiationStage.HAGGLING
+        assert result.negotiation_state == NegotiationStage.HAGGLING
         service._client.chat.completions.create.assert_awaited_once()
 
     @pytest.mark.asyncio
@@ -525,8 +461,8 @@ class TestFallbackDecision:
         assert _FALLBACK_DECISION.reply_text != "Error"
 
     def test_fallback_keeps_safe_stage(self) -> None:
-        """Fallback uses BROWSING stage (safe, non-terminal)."""
-        assert _FALLBACK_DECISION.new_stage == NegotiationStage.BROWSING
+        """Fallback uses INQUIRY stage (safe, non-terminal)."""
+        assert _FALLBACK_DECISION.negotiation_state == NegotiationStage.INQUIRY
 
     def test_fallback_reasoning_marked(self) -> None:
         """Fallback reasoning is marked as [FALLBACK]."""
@@ -548,34 +484,31 @@ class TestGenerateWithGodPrompt:
             transcribed_text="Namaste bhaiya!",
             context_block="",
             rag_context="",
-            scene_context=_scene(negotiation_stage="GREETING"),
+            scene_context=_scene(negotiation_state="GREETING"),
             session_id="test-greeting",
         )
         assert result["reply_text"]
-        assert "new_mood" in result
+        assert "happiness_score" in result
 
     @pytest.mark.asyncio
     async def test_haggling_flow(self, mock_llm: MockLLMService, mock_store: MockSessionStore) -> None:
-        """Price query triggers haggling response."""
-        # Pre-populate at BROWSING so BROWSING → HAGGLING is legal
+        """Price query triggers inquiry response."""
+        # Pre-populate at INQUIRY so INQUIRY → HAGGLING is legal
         await mock_store.create_session("test-haggling")
         await mock_store.save_session("test-haggling", {
-            "vendor_happiness": 55,
-            "vendor_patience": 70,
-            "negotiation_stage": "BROWSING",
-            "current_price": 0,
+            "happiness_score": 55,
+            "negotiation_state": "INQUIRY",
             "turn_count": 1,
-            "price_history": [],
         })
 
         result = await generate_vendor_response(
             transcribed_text="Yeh kitne ka hai bhai?",
             context_block="[Turn 1] User: Namaste bhaiya!",
             rag_context="Silk Scarf: Wholesale ₹150, Fair Retail ₹300-400.",
-            scene_context=_scene(negotiation_stage="BROWSING"),
+            scene_context=_scene(negotiation_state="INQUIRY"),
             session_id="test-haggling",
         )
-        assert result["new_stage"] in ("HAGGLING", "BROWSING")
+        assert result["negotiation_state"] in ("HAGGLING", "INQUIRY")
 
     @pytest.mark.asyncio
     async def test_session_state_persisted(self, mock_llm: MockLLMService, mock_store: MockSessionStore) -> None:
@@ -604,7 +537,7 @@ class TestGenerateWithGodPrompt:
             transcribed_text="Kitne ka final?",
             context_block="",
             rag_context="",
-            scene_context=_scene(negotiation_stage="HAGGLING"),
+            scene_context=_scene(negotiation_state="HAGGLING"),
             session_id="wrap-test",
         )
         assert result["reply_text"]
@@ -672,11 +605,8 @@ class TestPromptInjection:
     def test_anti_injection_notice_in_system_prompt(self) -> None:
         """Anti-injection security notice is in the system prompt."""
         prompt = build_system_prompt(
-            vendor_happiness=50,
-            vendor_patience=70,
-            negotiation_stage="BROWSING",
-            current_price=0,
-            user_offer=0,
+            happiness_score=50,
+            negotiation_state="INQUIRY",
             turn_count=1,
         )
         assert "Security Notice" in prompt
@@ -702,7 +632,7 @@ class TestMockSpeechExtraction:
         )
         result = await llm.generate_decision("system prompt", user_msg)
         # Should match "namaste" keyword, not false positive on "price"
-        assert result.new_stage == NegotiationStage.GREETING
+        assert result.negotiation_state == NegotiationStage.GREETING
 
     @pytest.mark.asyncio
     async def test_mock_no_false_positive_from_context(self) -> None:
@@ -714,8 +644,8 @@ class TestMockSpeechExtraction:
             rag_context="Wholesale price ₹150, retail cost ₹400",
         )
         result = await llm.generate_decision("system prompt", user_msg)
-        # "Aur dikhao kuch" has no keywords → default BROWSING
-        assert result.new_stage == NegotiationStage.BROWSING
+        # "Aur dikhao kuch" has no keywords → default GREETING
+        assert result.negotiation_state == NegotiationStage.GREETING
 
     @pytest.mark.asyncio
     async def test_mock_legacy_format_still_works(self) -> None:
@@ -723,4 +653,4 @@ class TestMockSpeechExtraction:
         llm = MockLLMService()
         user_msg = "User says: kitne ka hai\nContext: ...\nScene: price=0"
         result = await llm.generate_decision("system prompt", user_msg)
-        assert result.new_stage == NegotiationStage.HAGGLING
+        assert result.negotiation_state == NegotiationStage.INQUIRY

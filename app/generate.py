@@ -12,7 +12,7 @@ Usage by Dev B:
     from app.generate import generate_vendor_response
 
     result = await generate_vendor_response(
-        transcribed_text="भाई ये silk scarf कितने का है?",
+        transcribed_text="Bhaiya ye tomato kitne ka hai?",
         context_block=context_block,
         rag_context=rag_context,
         scene_context=request.scene_context,
@@ -66,20 +66,16 @@ async def generate_vendor_response(
         context_block: Formatted conversation history (from memory, Step 5).
         rag_context: Cultural/item knowledge (from RAG, Step 6). Can be "".
         scene_context: Game state from Unity (forwarded by Dev B). Contains
-            items_in_hand, looking_at, distance_to_vendor, vendor_npc_id,
-            vendor_happiness, vendor_patience, negotiation_stage,
-            current_price, user_offer.
+            object_grabbed, happiness_score, negotiation_state,
+            input_language, target_language.
         session_id: Unique session identifier for state lookup.
 
     Returns:
         Dict with validated vendor response:
         {
             "reply_text": str,
-            "new_mood": int,
-            "new_stage": str,
-            "price_offered": int,
-            "vendor_happiness": int,
-            "vendor_patience": int,
+            "happiness_score": int,
+            "negotiation_state": str,
             "vendor_mood": str
         }
 
@@ -121,7 +117,7 @@ async def generate_vendor_response(
             "step": "scene_parse",
             "request_id": request_id,
             "duration_ms": round((time.monotonic() - t0) * 1000, 1),
-            "stage": parsed_scene.negotiation_stage.value,
+            "stage": parsed_scene.negotiation_state.value,
         },
     )
 
@@ -165,12 +161,12 @@ async def generate_vendor_response(
 
     # ── 2½. Check terminal state ─────────────────────────
     current_stage_str = session_state.get(
-        "negotiation_stage", parsed_scene.negotiation_stage.value
+        "negotiation_state", parsed_scene.negotiation_state.value
     )
     try:
         current_stage = NegotiationStage(current_stage_str)
     except ValueError:
-        current_stage = parsed_scene.negotiation_stage
+        current_stage = parsed_scene.negotiation_state
 
     if current_stage in TERMINAL_STAGES:
         logger.warning(
@@ -189,11 +185,8 @@ async def generate_vendor_response(
         )
         response = VendorResponse(
             reply_text=closure_reply,
-            new_mood=session_state.get("vendor_happiness", 50),
-            new_stage=current_stage.value,
-            price_offered=session_state.get("current_price", 0),
-            vendor_happiness=session_state.get("vendor_happiness", 50),
-            vendor_patience=session_state.get("vendor_patience", 70),
+            happiness_score=session_state.get("happiness_score", 50),
+            negotiation_state=current_stage.value,
             vendor_mood="neutral",
         )
         return response.model_dump()
@@ -216,15 +209,12 @@ async def generate_vendor_response(
         )
         response = VendorResponse(
             reply_text="Bahut der ho gayi bhai! Dukaan band karna hai. Phir aana!",
-            new_mood=session_state.get("vendor_happiness", 50),
-            new_stage=NegotiationStage.CLOSURE.value,
-            price_offered=session_state.get("current_price", 0),
-            vendor_happiness=session_state.get("vendor_happiness", 50),
-            vendor_patience=max(session_state.get("vendor_patience", 70) - 10, 0),
+            happiness_score=max(session_state.get("happiness_score", 50) - 10, 0),
+            negotiation_state=NegotiationStage.CLOSURE.value,
             vendor_mood="annoyed",
         )
         # Persist forced closure
-        session_state["negotiation_stage"] = NegotiationStage.CLOSURE.value
+        session_state["negotiation_state"] = NegotiationStage.CLOSURE.value
         try:
             await store.save_session(session_id, session_state)
         except Exception:
@@ -237,28 +227,19 @@ async def generate_vendor_response(
 
     # Use authoritative state from session store, fall back to scene for first turn
     effective_happiness = session_state.get(
-        "vendor_happiness", parsed_scene.vendor_happiness
-    )
-    effective_patience = session_state.get(
-        "vendor_patience", parsed_scene.vendor_patience
+        "happiness_score", parsed_scene.happiness_score
     )
     effective_stage = session_state.get(
-        "negotiation_stage", parsed_scene.negotiation_stage.value
-    )
-    effective_price = session_state.get(
-        "current_price", parsed_scene.current_price
+        "negotiation_state", parsed_scene.negotiation_state.value
     )
 
     system_prompt = build_system_prompt(
-        vendor_happiness=effective_happiness,
-        vendor_patience=effective_patience,
-        negotiation_stage=effective_stage,
-        current_price=effective_price,
-        user_offer=parsed_scene.user_offer,
+        happiness_score=effective_happiness,
+        negotiation_state=effective_stage,
         turn_count=turn_count,
-        items_in_hand=parsed_scene.items_in_hand,
-        looking_at=parsed_scene.looking_at,
-        distance_to_vendor=parsed_scene.distance_to_vendor,
+        object_grabbed=parsed_scene.object_grabbed,
+        input_language=parsed_scene.input_language.value,
+        target_language=parsed_scene.target_language.value,
         wrap_up=turn_count >= WRAP_UP_TURN_THRESHOLD,
     )
 
@@ -305,8 +286,8 @@ async def generate_vendor_response(
             "step": "llm_decision",
             "request_id": request_id,
             "duration_ms": llm_ms,
-            "new_stage": ai_decision.new_stage.value,
-            "new_mood": ai_decision.new_mood,
+            "negotiation_state": ai_decision.negotiation_state.value,
+            "happiness_score": ai_decision.happiness_score,
             "reasoning": ai_decision.internal_reasoning,
         },
     )
@@ -333,11 +314,8 @@ async def generate_vendor_response(
     try:
         response = VendorResponse(
             reply_text=validated.reply_text,
-            new_mood=validated.new_mood,
-            new_stage=validated.new_stage.value,
-            price_offered=validated.price_offered,
-            vendor_happiness=validated.vendor_happiness,
-            vendor_patience=validated.vendor_patience,
+            happiness_score=validated.happiness_score,
+            negotiation_state=validated.negotiation_state.value,
             vendor_mood=validated.vendor_mood.value,
         )
     except ValidationError as exc:
@@ -366,12 +344,8 @@ async def generate_vendor_response(
     # ── 5. Persist state ─────────────────────────────────
     t0 = time.monotonic()
 
-    session_state["vendor_happiness"] = response.vendor_happiness
-    session_state["vendor_patience"] = response.vendor_patience
-    session_state["negotiation_stage"] = response.new_stage
-    session_state["current_price"] = response.price_offered
-    if response.price_offered > 0:
-        session_state.setdefault("price_history", []).append(response.price_offered)
+    session_state["happiness_score"] = response.happiness_score
+    session_state["negotiation_state"] = response.negotiation_state
 
     try:
         await store.save_session(session_id, session_state)
@@ -408,7 +382,7 @@ async def generate_vendor_response(
             "duration_ms": total_ms,
             "llm_ms": llm_ms,
             "turn_count": turn_count,
-            "stage": response.new_stage,
+            "stage": response.negotiation_state,
         },
     )
 

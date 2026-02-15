@@ -44,9 +44,9 @@ class TestValidateTransition:
     @pytest.mark.parametrize(
         "current,proposed",
         [
-            (NegotiationStage.GREETING, NegotiationStage.BROWSING),
-            (NegotiationStage.BROWSING, NegotiationStage.HAGGLING),
-            (NegotiationStage.BROWSING, NegotiationStage.WALKAWAY),
+            (NegotiationStage.GREETING, NegotiationStage.INQUIRY),
+            (NegotiationStage.INQUIRY, NegotiationStage.HAGGLING),
+            (NegotiationStage.INQUIRY, NegotiationStage.WALKAWAY),
             (NegotiationStage.HAGGLING, NegotiationStage.DEAL),
             (NegotiationStage.HAGGLING, NegotiationStage.WALKAWAY),
             (NegotiationStage.HAGGLING, NegotiationStage.CLOSURE),
@@ -58,26 +58,26 @@ class TestValidateTransition:
         current: NegotiationStage,
         proposed: NegotiationStage,
     ) -> None:
-        stage, warnings = validate_transition(current, proposed, vendor_happiness=60)
+        stage, warnings = validate_transition(current, proposed, happiness_score=60)
         assert stage == proposed
         assert warnings == []
 
     def test_walkaway_to_haggling_high_happiness(self) -> None:
-        """WALKAWAY → HAGGLING is legal when vendor_happiness > 40."""
+        """WALKAWAY → HAGGLING is legal when happiness_score > 40."""
         stage, warnings = validate_transition(
             NegotiationStage.WALKAWAY,
             NegotiationStage.HAGGLING,
-            vendor_happiness=50,
+            happiness_score=50,
         )
         assert stage == NegotiationStage.HAGGLING
         assert warnings == []
 
     def test_walkaway_to_haggling_low_happiness(self) -> None:
-        """WALKAWAY → HAGGLING blocked when vendor_happiness ≤ 40."""
+        """WALKAWAY → HAGGLING blocked when happiness_score ≤ 40."""
         stage, warnings = validate_transition(
             NegotiationStage.WALKAWAY,
             NegotiationStage.HAGGLING,
-            vendor_happiness=40,
+            happiness_score=40,
         )
         assert stage == NegotiationStage.CLOSURE
         assert len(warnings) == 1
@@ -88,7 +88,7 @@ class TestValidateTransition:
         stage, warnings = validate_transition(
             NegotiationStage.WALKAWAY,
             NegotiationStage.HAGGLING,
-            vendor_happiness=41,
+            happiness_score=41,
         )
         assert stage == NegotiationStage.HAGGLING
         assert warnings == []
@@ -97,7 +97,7 @@ class TestValidateTransition:
 
     @pytest.mark.parametrize("stage", list(NegotiationStage))
     def test_same_stage_always_legal(self, stage: NegotiationStage) -> None:
-        result, warnings = validate_transition(stage, stage, vendor_happiness=50)
+        result, warnings = validate_transition(stage, stage, happiness_score=50)
         assert result == stage
         assert warnings == []
 
@@ -110,13 +110,13 @@ class TestValidateTransition:
             (NegotiationStage.GREETING, NegotiationStage.DEAL),
             (NegotiationStage.GREETING, NegotiationStage.WALKAWAY),
             (NegotiationStage.GREETING, NegotiationStage.CLOSURE),
-            (NegotiationStage.BROWSING, NegotiationStage.GREETING),
-            (NegotiationStage.BROWSING, NegotiationStage.DEAL),
-            (NegotiationStage.BROWSING, NegotiationStage.CLOSURE),
+            (NegotiationStage.INQUIRY, NegotiationStage.GREETING),
+            (NegotiationStage.INQUIRY, NegotiationStage.DEAL),
+            (NegotiationStage.INQUIRY, NegotiationStage.CLOSURE),
             (NegotiationStage.HAGGLING, NegotiationStage.GREETING),
-            (NegotiationStage.HAGGLING, NegotiationStage.BROWSING),
+            (NegotiationStage.HAGGLING, NegotiationStage.INQUIRY),
             (NegotiationStage.WALKAWAY, NegotiationStage.GREETING),
-            (NegotiationStage.WALKAWAY, NegotiationStage.BROWSING),
+            (NegotiationStage.WALKAWAY, NegotiationStage.INQUIRY),
             (NegotiationStage.WALKAWAY, NegotiationStage.DEAL),
         ],
     )
@@ -125,7 +125,7 @@ class TestValidateTransition:
         current: NegotiationStage,
         proposed: NegotiationStage,
     ) -> None:
-        stage, warnings = validate_transition(current, proposed, vendor_happiness=60)
+        stage, warnings = validate_transition(current, proposed, happiness_score=60)
         assert stage == current  # keeps current stage
         assert len(warnings) >= 1
         assert "illegal" in warnings[0].lower()
@@ -141,7 +141,7 @@ class TestValidateTransition:
     ) -> None:
         if target == terminal:
             return  # same-stage is always allowed
-        stage, warnings = validate_transition(terminal, target, vendor_happiness=50)
+        stage, warnings = validate_transition(terminal, target, happiness_score=50)
         assert stage == terminal
         assert len(warnings) >= 1
 
@@ -154,7 +154,7 @@ class TestValidateTransition:
             for target in NegotiationStage:
                 if target == current:
                     continue
-                stage, _ = validate_transition(current, target, vendor_happiness=60)
+                stage, _ = validate_transition(current, target, happiness_score=60)
                 if target in legal:
                     # Special case: WALKAWAY→HAGGLING needs happiness check
                     if (
@@ -251,9 +251,12 @@ class TestDeriveVendorMood:
         "happiness,expected",
         [
             (100, VendorMood.ENTHUSIASTIC),
-            (80, VendorMood.ENTHUSIASTIC),
-            (71, VendorMood.ENTHUSIASTIC),
-            (70, VendorMood.NEUTRAL),
+            (90, VendorMood.ENTHUSIASTIC),
+            (81, VendorMood.ENTHUSIASTIC),
+            (80, VendorMood.FRIENDLY),
+            (70, VendorMood.FRIENDLY),
+            (61, VendorMood.FRIENDLY),
+            (60, VendorMood.NEUTRAL),
             (50, VendorMood.NEUTRAL),
             (41, VendorMood.NEUTRAL),
             (40, VendorMood.ANNOYED),
@@ -286,7 +289,7 @@ class TestTerminalState:
         "stage",
         [
             NegotiationStage.GREETING,
-            NegotiationStage.BROWSING,
+            NegotiationStage.INQUIRY,
             NegotiationStage.HAGGLING,
             NegotiationStage.WALKAWAY,
         ],
@@ -299,23 +302,19 @@ class TestTerminalState:
             session_id="test-123",
             stage=NegotiationStage.DEAL,
             turn_count=10,
-            final_price=500,
-            vendor_happiness=80,
-            vendor_patience=60,
+            happiness_score=80,
         )
         assert summary["result"] == "won"
         assert summary["final_stage"] == "DEAL"
         assert summary["turns_taken"] == 10
-        assert summary["final_price"] == 500
+        assert summary["final_happiness_score"] == 80
 
     def test_session_summary_closure(self) -> None:
         summary = build_session_summary(
             session_id="test-456",
             stage=NegotiationStage.CLOSURE,
             turn_count=25,
-            final_price=0,
-            vendor_happiness=20,
-            vendor_patience=10,
+            happiness_score=20,
         )
         assert summary["result"] == "ended"
         assert summary["final_stage"] == "CLOSURE"
@@ -330,11 +329,8 @@ def _make_decision(**overrides: object) -> AIDecision:
     """Helper to build an AIDecision with sensible defaults."""
     defaults = {
         "reply_text": "Test reply",
-        "new_mood": 55,
-        "new_stage": NegotiationStage.BROWSING,
-        "price_offered": None,
-        "vendor_happiness": 55,
-        "vendor_patience": 65,
+        "happiness_score": 55,
+        "negotiation_state": NegotiationStage.INQUIRY,
         "vendor_mood": VendorMood.NEUTRAL,
         "internal_reasoning": "test",
     }
@@ -346,12 +342,9 @@ def _make_session_state(**overrides: object) -> dict:
     """Helper to build a session state dict with defaults."""
     defaults = {
         "session_id": "test-session",
-        "vendor_happiness": 50,
-        "vendor_patience": 70,
-        "negotiation_stage": "GREETING",
-        "current_price": 0,
+        "happiness_score": 50,
+        "negotiation_state": "GREETING",
         "turn_count": 1,
-        "price_history": [],
     }
     defaults.update(overrides)
     return defaults
@@ -363,167 +356,130 @@ class TestValidateAIDecision:
     def test_valid_decision_passthrough(self) -> None:
         """A valid decision within bounds should pass through unchanged."""
         decision = _make_decision(
-            new_mood=55,
-            new_stage=NegotiationStage.BROWSING,
-            vendor_happiness=55,
-            vendor_patience=65,
+            happiness_score=55,
+            negotiation_state=NegotiationStage.INQUIRY,
         )
         state = _make_session_state(
-            negotiation_stage="GREETING",
-            vendor_happiness=50,
-            vendor_patience=70,
+            negotiation_state="GREETING",
+            happiness_score=50,
         )
         result = validate_ai_decision(decision, state)
 
-        assert result.new_stage == NegotiationStage.BROWSING
-        assert result.vendor_happiness == 55
-        assert result.vendor_patience == 65
+        assert result.negotiation_state == NegotiationStage.INQUIRY
+        assert result.happiness_score == 55
         assert result.warnings == []
         assert result.is_terminal is False
 
-    def test_mood_clamped_positive(self) -> None:
-        """Mood jumping +40 should be clamped to +15."""
+    def test_happiness_clamped_positive(self) -> None:
+        """Happiness jumping +40 should be clamped to +15."""
         decision = _make_decision(
-            new_mood=90,
-            new_stage=NegotiationStage.BROWSING,
-            vendor_happiness=90,
-            vendor_patience=70,
+            happiness_score=90,
+            negotiation_state=NegotiationStage.INQUIRY,
         )
         state = _make_session_state(
-            negotiation_stage="GREETING",
-            vendor_happiness=50,
-            vendor_patience=70,
+            negotiation_state="GREETING",
+            happiness_score=50,
         )
         result = validate_ai_decision(decision, state)
 
-        assert result.vendor_happiness == 65
-        assert result.new_mood == 65
+        assert result.happiness_score == 65
         assert len(result.warnings) >= 1
 
-    def test_mood_clamped_negative(self) -> None:
-        """Mood dropping -40 should be clamped to -15."""
+    def test_happiness_clamped_negative(self) -> None:
+        """Happiness dropping -40 should be clamped to -15."""
         decision = _make_decision(
-            new_mood=10,
-            new_stage=NegotiationStage.BROWSING,
-            vendor_happiness=10,
-            vendor_patience=30,
+            happiness_score=10,
+            negotiation_state=NegotiationStage.INQUIRY,
         )
         state = _make_session_state(
-            negotiation_stage="GREETING",
-            vendor_happiness=50,
-            vendor_patience=70,
+            negotiation_state="GREETING",
+            happiness_score=50,
         )
         result = validate_ai_decision(decision, state)
 
-        assert result.vendor_happiness == 35
-        assert result.vendor_patience == 55
+        assert result.happiness_score == 35
         assert len(result.warnings) >= 1
 
     def test_illegal_stage_blocked(self) -> None:
         """Illegal GREETING → DEAL should be blocked."""
         decision = _make_decision(
-            new_stage=NegotiationStage.DEAL,
+            negotiation_state=NegotiationStage.DEAL,
         )
-        state = _make_session_state(negotiation_stage="GREETING")
+        state = _make_session_state(negotiation_state="GREETING")
         result = validate_ai_decision(decision, state)
 
-        assert result.new_stage == NegotiationStage.GREETING
+        assert result.negotiation_state == NegotiationStage.GREETING
         assert any("illegal" in w.lower() for w in result.warnings)
 
     def test_deal_is_terminal(self) -> None:
         """HAGGLING → DEAL should mark session as terminal."""
         decision = _make_decision(
-            new_stage=NegotiationStage.DEAL,
-            price_offered=500,
-            vendor_happiness=60,
-            vendor_patience=65,
+            negotiation_state=NegotiationStage.DEAL,
+            happiness_score=60,
         )
         state = _make_session_state(
-            negotiation_stage="HAGGLING",
-            vendor_happiness=50,
-            vendor_patience=70,
+            negotiation_state="HAGGLING",
+            happiness_score=50,
         )
         result = validate_ai_decision(decision, state)
 
-        assert result.new_stage == NegotiationStage.DEAL
+        assert result.negotiation_state == NegotiationStage.DEAL
         assert result.is_terminal is True
 
     def test_closure_is_terminal(self) -> None:
         """HAGGLING → CLOSURE should mark session as terminal."""
         decision = _make_decision(
-            new_stage=NegotiationStage.CLOSURE,
-            vendor_happiness=50,
-            vendor_patience=60,
+            negotiation_state=NegotiationStage.CLOSURE,
+            happiness_score=50,
         )
         state = _make_session_state(
-            negotiation_stage="HAGGLING",
-            vendor_happiness=50,
-            vendor_patience=70,
+            negotiation_state="HAGGLING",
+            happiness_score=50,
         )
         result = validate_ai_decision(decision, state)
 
-        assert result.new_stage == NegotiationStage.CLOSURE
+        assert result.negotiation_state == NegotiationStage.CLOSURE
         assert result.is_terminal is True
 
     def test_vendor_mood_derived_from_happiness(self) -> None:
         """vendor_mood should be derived from clamped happiness, not AI's proposal."""
         decision = _make_decision(
-            vendor_happiness=55,
+            happiness_score=55,
             vendor_mood=VendorMood.ANGRY,  # AI says angry, but happiness says neutral
         )
         state = _make_session_state(
-            negotiation_stage="GREETING",
-            vendor_happiness=50,
+            negotiation_state="GREETING",
+            happiness_score=50,
         )
         result = validate_ai_decision(decision, state)
 
         assert result.vendor_mood == VendorMood.NEUTRAL  # derived, not AI's
 
-    def test_negative_price_clamped(self) -> None:
-        """price_offered=None should become 0 (Pydantic rejects negatives)."""
-        decision = _make_decision(price_offered=None)
-        state = _make_session_state(negotiation_stage="GREETING")
-        result = validate_ai_decision(decision, state)
-
-        assert result.price_offered == 0
-
-    def test_none_price_becomes_zero(self) -> None:
-        """price_offered=None should become 0."""
-        decision = _make_decision(price_offered=None)
-        state = _make_session_state(negotiation_stage="GREETING")
-        result = validate_ai_decision(decision, state)
-
-        assert result.price_offered == 0
-
     def test_invalid_session_stage_defaults(self) -> None:
         """Invalid stage in session state should default to GREETING."""
         decision = _make_decision(
-            new_stage=NegotiationStage.BROWSING,
-            vendor_happiness=55,
+            negotiation_state=NegotiationStage.INQUIRY,
+            happiness_score=55,
         )
         state = _make_session_state(
-            negotiation_stage="INVALID_STAGE",
-            vendor_happiness=50,
+            negotiation_state="INVALID_STAGE",
+            happiness_score=50,
         )
         result = validate_ai_decision(decision, state)
 
-        assert result.new_stage == NegotiationStage.BROWSING
+        assert result.negotiation_state == NegotiationStage.INQUIRY
         assert any("defaulting" in w.lower() for w in result.warnings)
 
     def test_custom_max_mood_delta(self) -> None:
         """Custom max_mood_delta should be respected."""
         decision = _make_decision(
-            new_mood=60,
-            vendor_happiness=60,
-            vendor_patience=75,
+            happiness_score=60,
         )
         state = _make_session_state(
-            negotiation_stage="GREETING",
-            vendor_happiness=50,
-            vendor_patience=70,
+            negotiation_state="GREETING",
+            happiness_score=50,
         )
         result = validate_ai_decision(decision, state, max_mood_delta=5)
 
-        assert result.vendor_happiness == 55
-        assert result.vendor_patience == 75  # only +5, within custom delta
+        assert result.happiness_score == 55
         assert len(result.warnings) >= 1

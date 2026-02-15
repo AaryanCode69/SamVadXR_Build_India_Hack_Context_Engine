@@ -49,11 +49,8 @@ _BACKOFF_DELAYS = [1.0, 2.0]
 # ── Fallback response — in-character, safe, keeps current stage ──
 _FALLBACK_DECISION = AIDecision(
     reply_text="Ek minute bhai, zara ruko... haan, bol raha tha kya?",
-    new_mood=50,
-    new_stage=NegotiationStage.BROWSING,
-    price_offered=None,
-    vendor_happiness=50,
-    vendor_patience=60,
+    happiness_score=50,
+    negotiation_state=NegotiationStage.INQUIRY,
     vendor_mood=VendorMood.NEUTRAL,
     internal_reasoning="[FALLBACK] LLM call failed after retries — safe in-character response",
 )
@@ -222,7 +219,6 @@ class OpenAILLMService:
 
         Handles minor LLM quirks:
         - Strips markdown code fences if present.
-        - Maps string "null" to None for price_offered.
         """
         # Strip markdown code fences sometimes added despite JSON mode
         cleaned = raw_content.strip()
@@ -232,10 +228,5 @@ class OpenAILLMService:
                 cleaned = cleaned[:-3].strip()
 
         data: dict[str, Any] = json.loads(cleaned)
-
-        # Normalise price_offered: LLM sometimes sends "null" as string or 0
-        price = data.get("price_offered")
-        if price == "null" or price == "None":
-            data["price_offered"] = None
 
         return AIDecision.model_validate(data)

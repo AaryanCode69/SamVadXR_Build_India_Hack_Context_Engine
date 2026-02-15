@@ -10,8 +10,8 @@ Provides:
 
 Node schema:
     (:Session {
-        session_id, vendor_happiness, vendor_patience,
-        negotiation_stage, turn_count, current_price, price_history,
+        session_id, happiness_score,
+        negotiation_state, turn_count,
         created_at, updated_at
     })
 """
@@ -24,7 +24,7 @@ from typing import Any, Optional
 
 from neo4j import AsyncGraphDatabase, AsyncDriver
 
-from app.exceptions import StateStoreError
+from ..exceptions import StateStoreError
 
 logger = logging.getLogger("samvadxr")
 
@@ -104,12 +104,9 @@ def get_driver() -> AsyncDriver:
 # ═══════════════════════════════════════════════════════════
 
 _DEFAULT_STATE: dict[str, Any] = {
-    "vendor_happiness": 50,
-    "vendor_patience": 70,
-    "negotiation_stage": "GREETING",
-    "current_price": 0,
+    "happiness_score": 50,
+    "negotiation_state": "GREETING",
     "turn_count": 0,
-    "price_history": [],
 }
 
 
@@ -139,12 +136,9 @@ class Neo4jSessionStore:
         query = """
         MERGE (s:Session {session_id: $session_id})
         ON CREATE SET
-            s.vendor_happiness = $vendor_happiness,
-            s.vendor_patience  = $vendor_patience,
-            s.negotiation_stage = $negotiation_stage,
-            s.current_price    = $current_price,
+            s.happiness_score   = $happiness_score,
+            s.negotiation_state = $negotiation_state,
             s.turn_count       = $turn_count,
-            s.price_history    = $price_history,
             s.created_at       = $now,
             s.updated_at       = $now
         RETURN s
@@ -254,22 +248,16 @@ class Neo4jSessionStore:
 
         query = """
         MERGE (s:Session {session_id: $session_id})
-        SET s.vendor_happiness  = $vendor_happiness,
-            s.vendor_patience   = $vendor_patience,
-            s.negotiation_stage = $negotiation_stage,
-            s.current_price     = $current_price,
+        SET s.happiness_score   = $happiness_score,
+            s.negotiation_state = $negotiation_state,
             s.turn_count        = $turn_count,
-            s.price_history     = $price_history,
             s.updated_at        = $now
         """
         params = {
             "session_id": session_id,
-            "vendor_happiness": state.get("vendor_happiness", 50),
-            "vendor_patience": state.get("vendor_patience", 70),
-            "negotiation_stage": state.get("negotiation_stage", "GREETING"),
-            "current_price": state.get("current_price", 0),
+            "happiness_score": state.get("happiness_score", 50),
+            "negotiation_state": state.get("negotiation_state", "GREETING"),
             "turn_count": state.get("turn_count", 0),
-            "price_history": state.get("price_history", []),
             "now": now,
         }
 
@@ -379,12 +367,9 @@ class Neo4jSessionStore:
         """Convert a Neo4j node to a plain dict matching the protocol."""
         return {
             "session_id": session_id,
-            "vendor_happiness": node.get("vendor_happiness", 50),
-            "vendor_patience": node.get("vendor_patience", 70),
-            "negotiation_stage": node.get("negotiation_stage", "GREETING"),
-            "current_price": node.get("current_price", 0),
+            "happiness_score": node.get("happiness_score", 50),
+            "negotiation_state": node.get("negotiation_state", "GREETING"),
             "turn_count": node.get("turn_count", 0),
-            "price_history": list(node.get("price_history", [])),
             "created_at": node.get("created_at"),
             "updated_at": node.get("updated_at"),
         }
