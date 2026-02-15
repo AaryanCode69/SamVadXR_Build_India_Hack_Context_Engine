@@ -18,12 +18,12 @@ from typing import Any, AsyncGenerator, Optional
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from neo4j import AsyncGraphDatabase
 from pydantic import BaseModel, Field
 
 from app.config import Settings, get_settings
 from app.exceptions import BrainServiceError, StateStoreError
 from app.logging_config import setup_logging
+from app.services.session_store import init_neo4j, close_neo4j
 
 # ---------------------------------------------------------------------------
 # Lifespan — runs once at startup / shutdown
@@ -54,16 +54,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         )
 
     # ── Neo4j connection ─────────────────────────────
-    neo4j_driver = None
-    if settings.neo4j_password:
+    neo4j_connected = False
+    if not settings.use_mocks and settings.neo4j_password:
         try:
-            neo4j_driver = AsyncGraphDatabase.driver(
-                settings.neo4j_uri,
-                auth=(settings.neo4j_user, settings.neo4j_password),
+            await init_neo4j(
+                uri=settings.neo4j_uri,
+                user=settings.neo4j_user,
+                password=settings.neo4j_password,
+                timeout_ms=settings.neo4j_timeout_ms,
             )
-            await neo4j_driver.verify_connectivity()
+            neo4j_connected = True
             logger.info(
-                "Neo4j connected",
+                "Neo4j connected via init_neo4j()",
                 extra={"step": "startup", "uri": settings.neo4j_uri},
             )
         except Exception as exc:
@@ -71,22 +73,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 "Neo4j connection failed — state persistence unavailable",
                 extra={"step": "startup", "error": str(exc)},
             )
-            neo4j_driver = None
+    elif settings.use_mocks:
+        logger.warning(
+            "USE_MOCKS=true — Neo4j disabled (using MockSessionStore)",
+            extra={"step": "startup"},
+        )
     else:
         logger.warning(
             "NEO4J_PASSWORD not set — Neo4j disabled (state will not be persisted)",
             extra={"step": "startup"},
         )
 
-    # Store driver on app.state for dependency injection in later phases
-    app.state.neo4j_driver = neo4j_driver
-
     yield  # app is running
 
     # ── Shutdown ─────────────────────────────────────
-    if neo4j_driver is not None:
-        await neo4j_driver.close()
-        logger.info("Neo4j driver closed", extra={"step": "shutdown"})
+    if neo4j_connected:
+        await close_neo4j()
+        logger.info("Neo4j driver closed via close_neo4j()", extra={"step": "shutdown"})
 
     logger.info("Samvad XR Orchestration shutting down", extra={"step": "shutdown"})
 

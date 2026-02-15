@@ -16,4 +16,5 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 markers = [
     "integration: marks tests that hit real external APIs (deselect with '-m \"not integration\"')",
+    "neo4j_integration: marks tests that need a live Neo4j instance (bypasses mock env)",
 ]

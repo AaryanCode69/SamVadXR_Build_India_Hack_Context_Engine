@@ -529,7 +529,7 @@ Every boundary — incoming arguments, AI output, state transition — gets vali
 
 ### Tasks
 
-- [ ] **5.0 — Session Store Implementation (Neo4j)**
+- [x] **5.0 — Session Store Implementation (Neo4j)**
   - Implement `app/services/session_store.py` with:
     - `async def load_session(session_id: str) -> GameState` — read from Neo4j
     - `async def save_session(session_id: str, state: GameState) -> None` — write to Neo4j
@@ -539,7 +539,7 @@ Every boundary — incoming arguments, AI output, state transition — gets vali
   - Add timeout enforcement (`NEO4J_TIMEOUT_MS`) on every query
   - If Neo4j is unreachable, raise a dedicated `StateStoreError` → 503 at API layer
 
-- [ ] **5.1 — Define the State Transition Graph**
+- [x] **5.1 — Define the State Transition Graph**
   - Legal transitions (updated for v3.0):
     ```
     GREETING  → BROWSING
@@ -558,7 +558,7 @@ Every boundary — incoming arguments, AI output, state transition — gets vali
   - Any transition not in this graph is ILLEGAL and must be blocked
   - Log illegal transition attempts as warnings (indicates prompt needs tuning)
 
-- [ ] **5.2 — Mood & Sentiment Mechanics**
+- [x] **5.2 — Mood & Sentiment Mechanics**
   - **Mood** is a number from 0 to 100 representing the NPC vendor's overall disposition
   - **vendor_happiness** (0-100): How happy the vendor is with the interaction
   - **vendor_patience** (0-100): How patient the vendor remains (decreases with frustrating interactions)
@@ -577,25 +577,25 @@ Every boundary — incoming arguments, AI output, state transition — gets vali
     - User shows genuine interest: +5 happiness, +3 patience
   - Note: These are GUIDELINES in the prompt. The State Engine enforces the ±15 clamp as a hard rule.
 
-- [ ] **5.3 — Win/Loss Condition Detection**
+- [x] **5.3 — Win/Loss Condition Detection**
   - `DEAL` state = user successfully negotiated. Log the final price. Mark session as "won."
   - `CLOSURE` state = negotiation ended without a deal (or natural conversation end). Log the reason. Mark session as "ended."
   - `WALKAWAY` is a temporary state — can recover (→ HAGGLING) or finalize (→ CLOSURE)
   - Emit a structured event (or log entry) when a terminal state is reached, including: session_id, turns_taken, final_price, final_mood, vendor_happiness, vendor_patience
 
-- [ ] **5.4 — Turn Counter & Guardrails**
+- [x] **5.4 — Turn Counter & Guardrails**
   - Track the number of interaction turns per session
   - If turns exceed a threshold (e.g., 30), the vendor should start wrapping up ("Bhai, mujhe doosre customers bhi dekhne hain" / "I have other customers too")
   - This prevents infinite loops and encourages players to make decisions
 
-- [ ] **5.5 — State Validation Function**
+- [x] **5.5 — State Validation Function**
   - Build a pure function: `validate_transition(current_stage, proposed_stage, vendor_happiness) → (approved_stage, warnings[])`
   - This function sits between the AI Brain output and the return value of `generate_vendor_response()`
   - It can override the AI's stage proposal if it violates rules
   - Also validates `vendor_happiness`, `vendor_patience`, `vendor_mood` consistency
   - All overrides are logged
 
-- [ ] **5.6 — State Persistence Integration**
+- [x] **5.6 — State Persistence Integration**
   - After state validation passes, persist the new state to Neo4j via `session_store.save_session()`
   - On each call to `generate_vendor_response()`, load the authoritative state from Neo4j via `session_store.load_session()`
   - Server-side state (from Neo4j) is authoritative — Unity's `scene_context` values are treated as supplementary context

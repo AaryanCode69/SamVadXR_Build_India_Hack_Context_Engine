@@ -69,11 +69,13 @@ def get_session_store() -> SessionStore:
             )
             _session_store = MockSessionStore()
         else:
-            # Phase 5 will provide Neo4jSessionStore here.
-            raise NotImplementedError(
-                "Neo4jSessionStore not implemented yet (Phase 5). "
-                "Set USE_MOCKS=true for development."
+            from app.services.session_store import Neo4jSessionStore
+
+            logger.info(
+                "DI: Using Neo4jSessionStore (real Neo4j)",
+                extra={"step": "dependency_init"},
             )
+            _session_store = Neo4jSessionStore()
     return _session_store
 
 

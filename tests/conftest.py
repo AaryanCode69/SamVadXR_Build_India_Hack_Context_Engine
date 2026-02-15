@@ -16,8 +16,15 @@ from app.services.mocks import MockLLMService, MockSessionStore
 
 
 @pytest.fixture(autouse=True)
-def _mock_env(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
-    """Set USE_MOCKS=true and provide a dummy OPENAI_API_KEY for all tests."""
+def _mock_env(request, monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
+    """Set USE_MOCKS=true and provide a dummy OPENAI_API_KEY for all tests.
+
+    Skipped for tests marked with ``neo4j_integration`` so that real
+    database integration tests can use their own environment variables.
+    """
+    if request.node.get_closest_marker("neo4j_integration"):
+        yield
+        return
     monkeypatch.setenv("USE_MOCKS", "true")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test-not-real")
     yield

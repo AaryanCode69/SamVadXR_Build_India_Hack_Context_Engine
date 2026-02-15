@@ -557,6 +557,17 @@ class TestGenerateWithGodPrompt:
     @pytest.mark.asyncio
     async def test_haggling_flow(self, mock_llm: MockLLMService, mock_store: MockSessionStore) -> None:
         """Price query triggers haggling response."""
+        # Pre-populate at BROWSING so BROWSING → HAGGLING is legal
+        await mock_store.create_session("test-haggling")
+        await mock_store.save_session("test-haggling", {
+            "vendor_happiness": 55,
+            "vendor_patience": 70,
+            "negotiation_stage": "BROWSING",
+            "current_price": 0,
+            "turn_count": 1,
+            "price_history": [],
+        })
+
         result = await generate_vendor_response(
             transcribed_text="Yeh kitne ka hai bhai?",
             context_block="[Turn 1] User: Namaste bhaiya!",

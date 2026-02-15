@@ -27,6 +27,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from app.config import get_settings
 from app.dependencies import get_llm_service, get_session_store
 from app.exceptions import BrainServiceError, StateStoreError  # noqa: F401 — re-export
 from app.models.enums import (
@@ -42,6 +43,7 @@ from app.prompts.vendor_system import (
     build_system_prompt,
     build_user_message,
 )
+from app.services.state_engine import validate_ai_decision
 
 logger = logging.getLogger("samvadxr")
 
@@ -231,6 +233,7 @@ async def generate_vendor_response(
 
     # ── 3. Compose prompt & call LLM ─────────────────────
     t0 = time.monotonic()
+    settings = get_settings()
 
     # Use authoritative state from session store, fall back to scene for first turn
     effective_happiness = session_state.get(
@@ -308,28 +311,38 @@ async def generate_vendor_response(
         },
     )
 
-    # ── 4. Validate & build response ─────────────────────
-    # Phase 5 adds full state engine (clamp ±15, legal transitions).
-    # For now, pass through with Pydantic validation.
+    # ── 4. Validate via State Engine ───────────────────────
     t0 = time.monotonic()
+
+    validated = validate_ai_decision(
+        ai_decision=ai_decision,
+        session_state=session_state,
+        max_mood_delta=settings.max_mood_delta,
+    )
+
+    if validated.warnings:
+        logger.warning(
+            "State engine overrides applied",
+            extra={
+                "step": "state_validate",
+                "request_id": request_id,
+                "overrides": validated.warnings,
+            },
+        )
 
     try:
         response = VendorResponse(
-            reply_text=ai_decision.reply_text,
-            new_mood=ai_decision.new_mood,
-            new_stage=ai_decision.new_stage.value,
-            price_offered=(
-                ai_decision.price_offered
-                if ai_decision.price_offered is not None
-                else 0
-            ),
-            vendor_happiness=ai_decision.vendor_happiness,
-            vendor_patience=ai_decision.vendor_patience,
-            vendor_mood=ai_decision.vendor_mood.value,
+            reply_text=validated.reply_text,
+            new_mood=validated.new_mood,
+            new_stage=validated.new_stage.value,
+            price_offered=validated.price_offered,
+            vendor_happiness=validated.vendor_happiness,
+            vendor_patience=validated.vendor_patience,
+            vendor_mood=validated.vendor_mood.value,
         )
     except ValidationError as exc:
         logger.error(
-            "AI decision failed validation",
+            "Validated decision failed Pydantic check",
             extra={
                 "step": "response_validate",
                 "request_id": request_id,
@@ -337,7 +350,7 @@ async def generate_vendor_response(
             },
         )
         raise BrainServiceError(
-            f"AI returned invalid decision: {exc}"
+            f"State-validated decision is invalid: {exc}"
         ) from exc
 
     logger.debug(
@@ -346,6 +359,7 @@ async def generate_vendor_response(
             "step": "response_validate",
             "request_id": request_id,
             "duration_ms": round((time.monotonic() - t0) * 1000, 1),
+            "is_terminal": validated.is_terminal,
         },
     )
 
