@@ -25,6 +25,11 @@ import time
 import uuid
 from typing import Any
 
+from app.exceptions import BrainServiceError, StateStoreError  # noqa: F401 — re-export
+from app.models.enums import VendorMood
+from app.models.request import SceneContext
+from app.models.response import VendorResponse
+
 logger = logging.getLogger("samvadxr")
 
 
@@ -80,21 +85,24 @@ async def generate_vendor_response(
         },
     )
 
+    # ── Parse & validate scene_context ───────────────────
+    parsed_scene = SceneContext.model_validate(scene_context)
+
     # ── Implementation in Phase 3-5 ──────────────────────
     # Phase 3: Wire up the function skeleton
     # Phase 4: Add AI Brain (GPT-4o prompt + parsing)
     # Phase 5: Add state validation + Neo4j persistence
     #
-    # For now, return a mock response for testing:
-    result: dict[str, Any] = {
-        "reply_text": "Haan ji, ek minute... (placeholder response)",
-        "new_mood": scene_context.get("vendor_happiness", 50),
-        "new_stage": scene_context.get("negotiation_stage", "BROWSING"),
-        "price_offered": scene_context.get("current_price", 0),
-        "vendor_happiness": scene_context.get("vendor_happiness", 50),
-        "vendor_patience": scene_context.get("vendor_patience", 70),
-        "vendor_mood": "neutral",
-    }
+    # For now, return a mock response validated through VendorResponse:
+    response = VendorResponse(
+        reply_text="Haan ji, ek minute... (placeholder response)",
+        new_mood=parsed_scene.vendor_happiness,
+        new_stage=parsed_scene.negotiation_stage.value,
+        price_offered=parsed_scene.current_price,
+        vendor_happiness=parsed_scene.vendor_happiness,
+        vendor_patience=parsed_scene.vendor_patience,
+        vendor_mood=VendorMood.NEUTRAL.value,
+    )
 
     elapsed_ms = (time.monotonic() - start_time) * 1000
     logger.info(
@@ -107,4 +115,4 @@ async def generate_vendor_response(
         },
     )
 
-    return result
+    return response.model_dump()

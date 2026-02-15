@@ -265,7 +265,7 @@ Every boundary — incoming arguments, AI output, state transition — gets vali
 
 ### Tasks
 
-- [ ] **1.1 — Define Enums & Constants**
+- [x] **1.1 — Define Enums & Constants**
   - `NegotiationStage` enum: `GREETING`, `BROWSING`, `HAGGLING`, `DEAL`, `WALKAWAY`, `CLOSURE`
     - **Changed from v2.0:** `WALK_AWAY` → `WALKAWAY`, `NO_DEAL` removed, `CLOSURE` added
   - `VendorMood` enum: `enthusiastic`, `neutral`, `annoyed`, `angry`
@@ -274,7 +274,7 @@ Every boundary — incoming arguments, AI output, state transition — gets vali
   - `MoodRange`: Constrained integer 0–100
   - `ItemID`: String for items in the bazaar (e.g., `"brass_statue"`, `"silk_scarf"`, `"cheap_keychain"`)
 
-- [ ] **1.2 — SceneContext Model (Input from Unity via Dev B)**
+- [x] **1.2 — SceneContext Model (Input from Unity via Dev B)**
   - This is the `scene_context` dict that Dev B forwards from Unity:
     ```python
     class SceneContext(BaseModel):
@@ -296,7 +296,7 @@ Every boundary — incoming arguments, AI output, state transition — gets vali
     - `current_price` and `user_offer` are new (explicit price tracking from Unity side)
   - Add field validators: `vendor_happiness` and `vendor_patience` clamped 0–100
 
-- [ ] **1.3 — AI Decision Model (Internal)**
+- [x] **1.3 — AI Decision Model (Internal)**
   - This is NOT sent to Dev B directly. This is the structured output we demand from GPT-4o:
     - `reply_text: str` — What the NPC says
     - `new_mood: int` — Updated mood after this interaction
@@ -307,7 +307,7 @@ Every boundary — incoming arguments, AI output, state transition — gets vali
     - `vendor_mood: VendorMood` — Mood category string
     - `internal_reasoning: str` — Why the AI made this decision (for debugging/logging only)
 
-- [ ] **1.4 — VendorResponse Model (Output to Dev B)**
+- [x] **1.4 — VendorResponse Model (Output to Dev B)**
   - This is what `generate_vendor_response()` returns (as a dict, matching this schema):
     ```python
     class VendorResponse(BaseModel):
@@ -321,14 +321,14 @@ Every boundary — incoming arguments, AI output, state transition — gets vali
     ```
   - **Note:** We return a plain `dict` (not a Pydantic model instance) to avoid coupling Dev B to our Pydantic version. But we validate internally using this model before returning.
 
-- [ ] **1.5 — Error Handling Contract**
+- [x] **1.5 — Error Handling Contract**
   - If `generate_vendor_response()` fails internally (LLM error, Neo4j error), it raises an exception
   - Dev B catches these and returns appropriate HTTP errors to Unity
   - Define: `class BrainServiceError(Exception)` — raised when LLM fails after retries
   - Define: `class StateStoreError(Exception)` — raised when Neo4j is unreachable
   - These are documented in the interface so Dev B knows what to catch
 
-- [ ] **1.6 — Share Contract with Dev B**
+- [x] **1.6 — Share Contract with Dev B**
   - Document the `generate_vendor_response()` function signature and return schema
   - Document the exception classes Dev B should catch
   - This becomes the "constitution" — no changes without a conversation
