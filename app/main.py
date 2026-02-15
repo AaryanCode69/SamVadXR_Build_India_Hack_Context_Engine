@@ -1,9 +1,13 @@
 """
-Samvad XR Orchestration — FastAPI entry point.
+Samvad XR Orchestration — FastAPI entry point (dev/testing only).
 
-This is the central nervous system. It receives requests from the Unity
-VR client and orchestrates the full pipeline: STT → Memory → RAG →
-AI Brain → State Validation (Neo4j) → TTS → Response.
+Architecture v3.0: Dev B owns the production API endpoint.
+This FastAPI server is retained for Dev A's isolated development and
+testing (health check, optional dev endpoint for testing
+generate_vendor_response directly).
+
+The primary deliverable is `app.generate.generate_vendor_response()`,
+which Dev B imports and calls from their endpoint handler.
 """
 
 import logging
@@ -95,8 +99,12 @@ def create_app() -> FastAPI:
     settings = get_settings()
 
     app = FastAPI(
-        title="Samvad XR Orchestration",
-        description="Backend orchestration for the Samvad XR VR language immersion platform.",
+        title="Samvad XR Orchestration — Dev Server",
+        description=(
+            "Dev A's AI brain and state engine for Samvad XR. "
+            "This server is for development/testing only. "
+            "In production, Dev B's server imports generate_vendor_response() directly."
+        ),
         version=settings.app_version,
         lifespan=lifespan,
     )
@@ -132,14 +140,32 @@ def create_app() -> FastAPI:
     # ── Health check ─────────────────────────────────
     @app.get("/health", tags=["system"])
     async def health_check() -> dict:
-        """Lightweight health probe — first thing Unity hits to verify connectivity."""
+        """Lightweight health probe for dev server."""
         return {
             "status": "ok",
             "version": settings.app_version,
         }
 
-    # ── Interact endpoint (placeholder — built in Phase 3) ───
-    # POST /api/interact will be added here.
+    # ── Dev test endpoint (placeholder — built in Phase 3) ───
+    # POST /api/dev/generate wraps generate_vendor_response()
+    # for isolated curl/Postman testing. Not for production use.
+    @app.post("/api/dev/generate", tags=["dev"])
+    async def dev_generate(payload: dict) -> dict:
+        """Dev-only endpoint to test generate_vendor_response() directly.
+
+        Expects JSON with: transcribed_text, context_block, rag_context,
+        scene_context (dict), session_id.
+        """
+        from app.generate import generate_vendor_response
+
+        result = await generate_vendor_response(
+            transcribed_text=payload.get("transcribed_text", ""),
+            context_block=payload.get("context_block", ""),
+            rag_context=payload.get("rag_context", ""),
+            scene_context=payload.get("scene_context", {}),
+            session_id=payload.get("session_id", "dev-test"),
+        )
+        return result
 
     return app
 

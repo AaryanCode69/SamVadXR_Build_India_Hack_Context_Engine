@@ -1,392 +1,306 @@
 # Samvad XR — Integration Guide for Developer B
 
-> **What this document is:** A clear contract between us. It tells you exactly what I need from your modules, what I'll do with them, and how our code connects at runtime.
+> **What this document is:** A clear contract between Dev A and Dev B. It tells Dev B exactly what
+> function Dev A provides, what arguments it expects, what it returns, and how to initialize
+> Dev A's dependencies within Dev B's server.
 >
-> **TL;DR:** You build the ears (STT), the mouth (TTS), the cultural memory (RAG), and the conversation memory. I build the brain (LLM agent), the game rules (state engine), and the API that Unity talks to. I import your modules and call your functions in a specific order.
+> **TL;DR:** Dev B builds the ears (STT), the mouth (TTS), the cultural memory (RAG), the conversation
+> memory, and owns the API endpoint. Dev A builds the brain (LLM agent) and the game rules (state engine).
+> Dev B imports Dev A's function and calls it mid-pipeline.
+>
+> **Architecture v3.0:** Dev B owns `POST /api/interact`. Dev A provides `generate_vendor_response()`.
 
 ---
 
 ## 1. The Big Picture — Who Owns What
 
-### Complete Request Lifecycle (Finalized)
+### Complete Request Lifecycle (v3.0 — Finalized)
 
 ```
 Step  Owner   Module              Action                                         Time
 ────  ──────  ──────────────────  ─────────────────────────────────────────────   ────
- 1    Dev A   main.py             Receive POST /api/interact, parse request        0ms
+ 1    Dev B   main.py             Receive POST /api/interact, parse request        0ms
  2    Dev B   middleware.py        base64_to_bytes(request.audio_base64)           1ms
  3    Dev B   voice_ops.py         await transcribe_with_sarvam(bytes, "hi-IN")  ~800ms
                                    → "भाई ये silk scarf कितने का है?"
  4    Dev B   context_memory.py    memory.add_turn("user", text, metadata)         1ms
  5    Dev B   context_memory.py    context_block = memory.get_context_block()       1ms
  6    Dev B   rag_ops.py           rag_ctx = await retrieve_context(text, 3)      ~50ms
- 7    Dev A   ai_brain.py          Compose prompt (context_block + rag_ctx         ~2s
-                                     + Neo4j state) → LLM → parse JSON
- 7½   Dev A   state_engine.py      Validate via Neo4j: clamp mood ±15,            ~20ms
+ 7    Dev A   generate.py          generate_vendor_response(                       ~2s
+                                     transcribed_text, context_block,
+                                     rag_context, scene_context, session_id)
+ 7½   Dev A   state_engine.py      (Internal) Validate via Neo4j: clamp mood,    ~20ms
                                      verify stage transition is legal
  8    Dev B   context_memory.py    memory.add_turn("vendor", reply, metadata)       1ms
  9    Dev B   voice_ops.py         audio = await speak_with_sarvam(reply, "hi-IN") ~600ms
 10    Dev B   middleware.py         b64 = bytes_to_base64(audio)                     1ms
-11    Dev A   main.py              Return InteractResponse to Unity                 0ms
+11    Dev B   main.py              Return InteractResponse to Unity                 0ms
                                                                     TOTAL ≈ 3.5s
 ```
 
-**Your modules power 8 of the 11 steps.** But I'm the one calling them, in this exact sequence, inside my endpoint function.
+**Dev B owns 9 of the 11 steps.** Dev A provides a single function (Steps 7 + 7½) that Dev B calls.
 
-> **Note on Neo4j (Steps 7 & 7½):** I use Neo4j as the persistent state store for session game state (mood, stage, turn count, price history). This is entirely my domain — you never interact with Neo4j directly. Your conversation memory (`context_memory.py`) handles dialogue history; my Neo4j graph handles game logic state.
-
----
-
-## 2. Your Modules — What I Need From Each
-
-### 2.1 `middleware.py` — Encoding Utilities
-
-These are simple, synchronous helper functions.
-
-```
-┌──────────────────────────────────────────────────────┐
-│  Function: base64_to_bytes(b64_string: str) -> bytes │
-│                                                      │
-│  Input:  "SGVsbG8gV29ybGQ="  (base64 string)        │
-│  Output: b"Hello World"       (raw bytes)            │
-│                                                      │
-│  Called at: Step 2 (before STT)                      │
-│  Error case: If input is invalid base64, raise       │
-│              ValueError with a clear message         │
-└──────────────────────────────────────────────────────┘
-
-┌──────────────────────────────────────────────────────┐
-│  Function: bytes_to_base64(audio_bytes: bytes) -> str│
-│                                                      │
-│  Input:  b"\x00\x01\x02..."  (raw audio bytes)      │
-│  Output: "AAEC..."            (base64 string)        │
-│                                                      │
-│  Called at: Step 10 (after TTS)                      │
-│  Error case: Should never fail on valid bytes        │
-└──────────────────────────────────────────────────────┘
-```
-
-### 2.2 `voice_ops.py` — Sarvam STT & TTS
-
-These are the slowest steps in the pipeline. They MUST be `async`.
-
-```
-┌────────────────────────────────────────────────────────────────┐
-│  Function: transcribe_with_sarvam(                             │
-│      audio_bytes: bytes,                                       │
-│      language_code: str        # "hi-IN", "kn-IN", "ta-IN",   │
-│  ) -> str                        "en-IN", "hi-EN"             │
-│                                                                │
-│  Input:  Raw audio bytes from the VR headset mic               │
-│  Output: Transcribed text as a string                          │
-│          e.g. "भाई ये silk scarf कितने का है?"                    │
-│                                                                │
-│  Called at: Step 3                                              │
-│  Latency budget: ~800ms (your estimate)                        │
-│  My timeout: 5 seconds                                         │
-│                                                                │
-│  ⚠️  QUESTIONS I NEED ANSWERED:                                │
-│  1. What do you return if audio is silence/noise?              │
-│     → Empty string ""? Or do you raise an exception?           │
-│  2. What exception type do you raise on Sarvam API failure?    │
-│     → I need to catch it specifically in my error handler      │
-│  3. Does this function handle retries internally, or should I? │
-└────────────────────────────────────────────────────────────────┘
-
-┌────────────────────────────────────────────────────────────────┐
-│  Function: speak_with_sarvam(                                  │
-│      text: str,                                                │
-│      language_code: str                                        │
-│  ) -> bytes                                                    │
-│                                                                │
-│  Input:  Vendor's reply text                                   │
-│          e.g. "अरे भाई, ये pure silk है! ₹800 का है"             │
-│  Output: Audio bytes (WAV or MP3 — which format?)              │
-│                                                                │
-│  Called at: Step 9                                              │
-│  Latency budget: ~600ms (your estimate)                        │
-│  My timeout: 5 seconds                                         │
-│                                                                │
-│  ⚠️  QUESTIONS I NEED ANSWERED:                                │
-│  1. What audio format/encoding? WAV 16-bit PCM? MP3?          │
-│     → Unity needs to know what to decode on the other end      │
-│  2. What sample rate? 16kHz? 22kHz? 44.1kHz?                  │
-│  3. What happens if Sarvam TTS is down?                        │
-│     → I'll fall back to sending text-only (no audio),          │
-│       but I need to know what exception to catch               │
-└────────────────────────────────────────────────────────────────┘
-```
-
-### 2.3 `context_memory.py` — Conversation Memory
-
-This tracks the full back-and-forth history within a session.
-
-```
-┌────────────────────────────────────────────────────────────────┐
-│  Class: ConversationMemory                                     │
-│                                                                │
-│  Method: add_turn(                                             │
-│      role: str,           # "user" or "vendor"                 │
-│      text: str,           # what was said                      │
-│      metadata: dict       # extra info (see below)             │
-│  ) -> None                                                     │
-│                                                                │
-│  I call this TWICE per request:                                │
-│                                                                │
-│  Call 1 (Step 4) — after STT:                                  │
-│    memory.add_turn("user", "भाई ये silk scarf कितने का है?", { │
-│        "held_item": "silk_scarf",                              │
-│        "looked_at_item": "brass_statue",                       │
-│        "mood": 55,                                             │
-│        "stage": "BROWSING"                                     │
-│    })                                                          │
-│                                                                │
-│  Call 2 (Step 8) — after AI decides:                           │
-│    memory.add_turn("vendor", "अरे भाई, ये pure silk है!...", { │
-│        "mood": 60,                                             │
-│        "stage": "HAGGLING",                                    │
-│        "price": 700                                            │
-│    })                                                          │
-│                                                                │
-│  ⚠️  QUESTION: Do you need specific metadata keys, or is it   │
-│  an arbitrary dict you store as-is?                            │
-└────────────────────────────────────────────────────────────────┘
-
-┌────────────────────────────────────────────────────────────────┐
-│  Method: get_context_block() -> str                            │
-│                                                                │
-│  Called at: Step 5 (before I build the LLM prompt)             │
-│                                                                │
-│  What I expect back: A formatted string of recent conversation │
-│  history that I can inject directly into the LLM prompt.       │
-│                                                                │
-│  Example output:                                               │
-│  """                                                           │
-│  [Turn 1] User: Namaste bhaiya, kya haal hai?                 │
-│  [Turn 1] Vendor: Aao aao! Kya chahiye aapko?                 │
-│  [Turn 2] User: भाई ये silk scarf कितने का है?                  │
-│  """                                                           │
-│                                                                │
-│  ⚠️  QUESTIONS:                                                │
-│  1. How many turns does this include? Last 5? Last 10? All?    │
-│     → I'd suggest last 10 turns max to control token usage     │
-│  2. Does the format include metadata (mood, price) or just     │
-│     the spoken text?                                           │
-│     → I prefer text-only in the context block. I'll inject     │
-│       current mood/stage separately from scene_context.        │
-│  3. Can I configure the window size (number of turns)?         │
-└────────────────────────────────────────────────────────────────┘
-```
-
-**Important — Memory Instance Lifecycle:**
-
-I will create and manage the `ConversationMemory` instance per session on my side:
-
-```
-# In my orchestration code (conceptual)
-sessions = {}   # session_id → ConversationMemory
-
-def get_memory(session_id: str) -> ConversationMemory:
-    if session_id not in sessions:
-        sessions[session_id] = ConversationMemory()
-    return sessions[session_id]
-```
-
-This means your `ConversationMemory` class should:
-- Be instantiable with no required arguments (or with a `session_id` if you need it)
-- Store state in the instance (not in a global/singleton)
-- Be safe to create many instances (one per active VR session)
-
-Let me know if you had a different design in mind (e.g., a singleton with internal session routing).
-
-### 2.4 `rag_ops.py` — ChromaDB Retrieval
-
-```
-┌────────────────────────────────────────────────────────────────┐
-│  Function: retrieve_context(                                   │
-│      query: str,           # the user's transcribed text       │
-│      n_results: int = 3    # how many chunks to return         │
-│  ) -> str                                                      │
-│                                                                │
-│  Called at: Step 6                                              │
-│  Latency budget: ~50ms (your estimate)                         │
-│  My timeout: 3 seconds                                         │
-│                                                                │
-│  What I expect back: A single string with the relevant         │
-│  cultural/item knowledge, ready to inject into the LLM prompt. │
-│                                                                │
-│  Example output:                                               │
-│  """                                                           │
-│  - Silk scarves from Varanasi are known for Banarasi weave     │
-│  - Typical retail price range: ₹500-₹1500                     │
-│  - Vendors usually start 2x above their minimum price          │
-│  """                                                           │
-│                                                                │
-│  ⚠️  QUESTIONS:                                                │
-│  1. Is the return type a single concatenated string, or a      │
-│     list of strings? → I'd prefer a single string I can        │
-│     drop directly into the prompt.                             │
-│  2. What do you return when there are no relevant results?     │
-│     → Empty string ""? Or "No context available"?              │
-│  3. Is ChromaDB running in-process or as a separate service?   │
-│     → Affects deployment setup                                 │
-│  4. Is this function async or sync?                            │
-│     → If sync, I'll wrap it in asyncio.to_thread()             │
-└────────────────────────────────────────────────────────────────┘
-```
+> **Note on Neo4j (Steps 7 & 7½):** Dev A uses Neo4j as the persistent state store for session game
+> state (mood, stage, turn count, price history). This is entirely Dev A's domain — Dev B never
+> interacts with Neo4j directly. Dev B's conversation memory (`context_memory.py`) handles dialogue
+> history; Dev A's Neo4j graph handles game logic state.
 
 ---
 
-## 3. The Critical Question: Async or Sync?
+## 2. What Dev A Provides — The Function Interface
 
-My FastAPI server runs on an async event loop. If your functions make blocking I/O calls (HTTP requests to Sarvam, ChromaDB queries), they **must** be either:
+### 2.1 Primary Function: `generate_vendor_response()`
 
-| Your Function | Makes Network Call? | Must Be Async? |
-|--------------|-------------------|----------------|
-| `base64_to_bytes` | No | No (pure computation) |
-| `bytes_to_base64` | No | No (pure computation) |
-| `transcribe_with_sarvam` | Yes (Sarvam API) | **Yes** |
-| `speak_with_sarvam` | Yes (Sarvam API) | **Yes** |
-| `retrieve_context` | Yes (ChromaDB) | **Yes, or I'll wrap it** |
-| `memory.add_turn` | No (in-memory) | No |
-| `memory.get_context_block` | No (in-memory) | No |
+This is the **one function** Dev B calls at Step 7:
 
-**Preferred:** Use `httpx.AsyncClient` or `aiohttp` for your Sarvam API calls instead of `requests`. If you're using `requests` (synchronous), let me know — I'll wrap your calls in `asyncio.to_thread()`, but it's less efficient.
-
----
-
-## 4. Language Code Format — Let's Standardize
-
-Your pipeline uses Sarvam's format. Let's go with yours:
-
-| Language | Code We'll Both Use |
-|----------|-------------------|
-| Hindi | `hi-IN` |
-| English | `en-IN` |
-| Hinglish | `hi-EN` |
-| Kannada | `kn-IN` |
-| Tamil | `ta-IN` |
-
-I'll update my Pydantic enums to match. This is now the single source of truth.
-
----
-
-## 5. Error Contract — What Should Happen When Things Break
-
-I need to know what exceptions your functions raise so I can handle them properly. Here's what I propose — please confirm or correct:
-
-| Scenario | Your Function | What You Should Do | What I'll Do |
-|----------|--------------|-------------------|-------------|
-| Sarvam STT API is down | `transcribe_with_sarvam` | Raise a specific exception (e.g., `SarvamServiceError`) | Return 503 to Unity: "Voice recognition unavailable" |
-| Audio is silence/noise | `transcribe_with_sarvam` | Return empty string `""` | Vendor says "Kuch bola aapne?" (Did you say something?) |
-| STT returns garbage | `transcribe_with_sarvam` | Return whatever Sarvam returns (your best effort) | My AI brain will handle garbled input gracefully |
-| Sarvam TTS API is down | `speak_with_sarvam` | Raise `SarvamServiceError` | Return text-only response (empty audio, subtitle only) |
-| ChromaDB has no results | `retrieve_context` | Return empty string `""` | AI brain proceeds without cultural context (still works, just less grounded) |
-| ChromaDB is unreachable | `retrieve_context` | Raise `RAGServiceError` | I skip RAG, continue without it (graceful degradation) |
-
-**My ask:** Define two exception classes I can import:
 ```python
-class SarvamServiceError(Exception): ...
-class RAGServiceError(Exception): ...
+# Dev B imports this:
+from app.generate import generate_vendor_response
+
+# Dev B calls it like this:
+result = await generate_vendor_response(
+    transcribed_text="भाई ये silk scarf कितने का है?",   # ← from Step 3 (STT)
+    context_block=context_block,                           # ← from Step 5 (memory)
+    rag_context=rag_context,                               # ← from Step 6 (RAG)
+    scene_context=request.scene_context,                   # ← from Unity
+    session_id=request.session_id                          # ← from Unity
+)
 ```
 
-Or tell me what you're already using and I'll catch those.
+**Parameters:**
+
+| Parameter | Type | Source | Description |
+|-----------|------|--------|-------------|
+| `transcribed_text` | `str` | Dev B (Step 3 STT) | What the user said, in native script |
+| `context_block` | `str` | Dev B (Step 5 memory) | Formatted conversation history string |
+| `rag_context` | `str` | Dev B (Step 6 RAG) | Cultural/item knowledge from ChromaDB |
+| `scene_context` | `dict` | Unity (via Dev B) | Game state from VR scene (see §2.2) |
+| `session_id` | `str` | Unity (via Dev B) | Unique session identifier |
+
+**Returns:** `dict` with the following schema:
+
+```python
+{
+    "reply_text": str,          # Vendor's spoken response
+    "new_mood": int,            # Validated mood (0-100, clamped ±15)
+    "new_stage": str,           # "GREETING"|"BROWSING"|"HAGGLING"|"DEAL"|"WALKAWAY"|"CLOSURE"
+    "price_offered": int,       # Vendor's current asking price
+    "vendor_happiness": int,    # 0-100
+    "vendor_patience": int,     # 0-100
+    "vendor_mood": str          # "enthusiastic"|"neutral"|"annoyed"|"angry"
+}
+```
+
+### 2.2 Scene Context Format (from Unity)
+
+Dev B forwards the `scene_context` dict from Unity unchanged:
+
+```python
+{
+    "items_in_hand": ["brass_keychain"],     # List of items user holds
+    "looking_at": "silk_scarf",              # Gaze-tracked item
+    "distance_to_vendor": 1.2,              # Physical proximity
+    "vendor_npc_id": "vendor_01",           # Which vendor NPC
+    "vendor_happiness": 55,                  # 0-100
+    "vendor_patience": 70,                   # 0-100
+    "negotiation_stage": "BROWSING",        # Current stage from Unity
+    "current_price": 0,                      # Last quoted price
+    "user_offer": 0                          # User's latest offer
+}
+```
+
+> **Note:** Dev A's Neo4j state is authoritative. The `scene_context` values from Unity are treated
+> as supplementary context (e.g., `items_in_hand`, `looking_at`, `distance_to_vendor`), but mood/stage
+> authority comes from Neo4j.
+
+### 2.3 Exception Classes
+
+Dev A raises these exceptions that Dev B should catch:
+
+```python
+from app.services.session_store import StateStoreError
+from app.services.ai_brain import BrainServiceError
+```
+
+| Exception | When Raised | Dev B's Response to Unity |
+|-----------|-------------|--------------------------|
+| `BrainServiceError` | LLM failed after retries | Return 500: "AI processing error" |
+| `StateStoreError` | Neo4j is unreachable | Return 503: "Game state unavailable" |
+
+If `rag_context` is empty (`""`), the function works fine — graceful degradation.
+If `context_block` is empty (`""`), the function works fine — it's treated as the first turn.
+
+### 2.4 Neo4j Initialization
+
+Dev A's function requires Neo4j. Dev B must initialize it at server startup:
+
+```python
+# In Dev B's FastAPI lifespan:
+from app.services.session_store import init_neo4j, close_neo4j
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Dev B's own initialization...
+    
+    # Initialize Dev A's Neo4j connection
+    await init_neo4j(
+        uri=os.getenv("NEO4J_URI", "bolt://localhost:7687"),
+        user=os.getenv("NEO4J_USER", "neo4j"),
+        password=os.getenv("NEO4J_PASSWORD")
+    )
+    
+    yield
+    
+    # Cleanup Dev A's Neo4j connection
+    await close_neo4j()
+```
+
+### 2.5 Configuration (Dev A's env vars Dev B must set)
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `OPENAI_API_KEY` | Yes | — | OpenAI API key (for LLM) |
+| `OPENAI_MODEL` | No | `gpt-4o` | Which model to use |
+| `NEO4J_URI` | No | `bolt://localhost:7687` | Neo4j connection URI |
+| `NEO4J_USER` | No | `neo4j` | Neo4j username |
+| `NEO4J_PASSWORD` | Yes | — | Neo4j password |
+| `NEO4J_TIMEOUT_MS` | No | `2000` | Per-query Neo4j timeout |
+| `MAX_TURNS` | No | `30` | Max turns per session |
+| `MAX_MOOD_DELTA` | No | `15` | Max mood change per turn |
+| `LOG_LEVEL` | No | `INFO` | Log verbosity |
 
 ---
 
-## 6. What I Do Between Your Steps (The Invisible Work)
+## 3. How Dev B Uses Our Function — Conceptual Code
 
-Between steps 6 and 9, there's a lot happening on my side that's invisible to you but critical to the product:
+This is what Dev B's endpoint handler should look like (from integration_response.md):
 
-### Step 7 — The AI Brain (~2s)
+```python
+# Dev B's main.py — /api/interact endpoint
 
-I take **everything your functions produced**, combine it with **game state from Neo4j**, and compose a prompt for GPT-4o:
+from app.generate import generate_vendor_response
+from app.services.ai_brain import BrainServiceError
+from app.services.session_store import StateStoreError
 
+@app.post("/api/interact")
+async def interact(request: InteractRequest) -> InteractResponse:
+
+    # Step 1 — Parse (Pydantic already validated)
+    memory = get_memory(request.session_id)
+
+    # Step 2 — Decode audio
+    audio_bytes = base64_to_bytes(request.audio_base64)
+
+    # Step 3 — Speech-to-Text
+    transcribed_text = await transcribe_with_sarvam(audio_bytes, request.language_code)
+
+    if transcribed_text == "":
+        return build_silence_response(request.session_id)
+
+    # Step 4 — Store user turn
+    memory.add_turn("user", transcribed_text, extract_metadata(request.scene_context))
+
+    # Steps 5 & 6 — Parallel: context history + RAG
+    context_block, rag_context = await asyncio.gather(
+        asyncio.to_thread(memory.get_context_block),
+        retrieve_context(transcribed_text, n_results=3)
+    )
+
+    # Step 7 + 7½ — Call Dev A's brain (LLM + Neo4j validation)
+    try:
+        result = await generate_vendor_response(
+            transcribed_text=transcribed_text,
+            context_block=context_block,
+            rag_context=rag_context,
+            scene_context=request.scene_context,
+            session_id=request.session_id
+        )
+    except BrainServiceError:
+        return JSONResponse(status_code=500, content={"error": "AI processing error"})
+    except StateStoreError:
+        return JSONResponse(status_code=503, content={"error": "Game state unavailable"})
+
+    # Step 8 — Store vendor turn
+    memory.add_turn("vendor", result["reply_text"], {
+        "vendor_happiness": result["vendor_happiness"],
+        "vendor_patience": result["vendor_patience"],
+        "stage": result["new_stage"],
+        "price": result["price_offered"]
+    })
+
+    # Step 9 — Text-to-Speech
+    audio_bytes = await speak_with_sarvam(result["reply_text"], request.language_code)
+
+    # Step 10 — Encode audio
+    audio_base64 = bytes_to_base64(audio_bytes)
+
+    # Step 11 — Return response
+    return InteractResponse(
+        session_id=request.session_id,
+        transcribed_text=transcribed_text,
+        agent_reply_text=result["reply_text"],
+        agent_audio_base64=audio_base64,
+        vendor_mood=result.get("vendor_mood", "neutral"),
+        negotiation_state=build_negotiation_state(result)
+    )
 ```
-╔══════════════════════════════════════════════════════════════╗
-║  SYSTEM PROMPT (written by me — the "God Prompt")           ║
-║  • Vendor persona (Ramesh, 55, from Jaipur)                 ║
-║  • Behavioral rules based on mood ranges                    ║
-║  • State transition rules (GREETING→BROWSING→HAGGLING→...)  ║
-║  • Strict JSON output schema                                ║
-╠══════════════════════════════════════════════════════════════╣
-║  CONVERSATION HISTORY ← from your get_context_block()       ║
-║  [Turn 1] User: Namaste bhaiya!                             ║
-║  [Turn 1] Vendor: Aao! Kya chahiye?                         ║
-╠══════════════════════════════════════════════════════════════╣
-║  CULTURAL CONTEXT ← from your retrieve_context()            ║
-║  • Silk scarves retail ₹500-₹1500                           ║
-║  • Vendors start at 2x minimum                              ║
-╠══════════════════════════════════════════════════════════════╣
-║  GAME STATE ← from Neo4j (my domain, not yours)             ║
-║  • current_mood: 55                                          ║
-║  • current_stage: "BROWSING"                                 ║
-║  • turn_count: 3                                             ║
-║  • price_history: [1500, 1200]                               ║
-╠══════════════════════════════════════════════════════════════╣
-║  SCENE CONTEXT ← from Unity request metadata                ║
-║  • held_item: "silk_scarf"                                   ║
-║  • looked_at_item: "brass_statue"                            ║
-╠══════════════════════════════════════════════════════════════╣
-║  USER MESSAGE ← from your transcribe_with_sarvam()          ║
-║  "भाई ये silk scarf कितने का है?"                               ║
-╚══════════════════════════════════════════════════════════════╝
-                            │
-                            ▼
-                    GPT-4o responds with:
-            {
-              "reply_text": "अरे भाई, ये pure silk है!...",
-              "new_mood": 60,
-              "new_stage": "HAGGLING",
-              "price_offered": 700,
-              "internal_reasoning": "User is directly asking..."
-            }
-```
-
-### Step 7½ — State Validation via Neo4j (~20ms)
-
-I validate the AI's output against the state graph in Neo4j:
-- Clamp mood to 0–100, max ±15 change per turn
-- Verify the stage transition is legal (e.g., can't jump from GREETING to DEAL)
-- If the AI hallucinates an illegal state, I override it and keep the current state
-- Write the validated new state back to Neo4j
-
-This is fully my responsibility. You never interact with Neo4j.
 
 ---
 
-## 7. What I'm Building While You're Building
+## 4. Data Ownership Summary
 
-So we're not blocked on each other, here's what I'm doing in parallel:
-
-| My Task | Why You Don't Need to Wait |
-|---------|---------------------------|
-| Mocking all your functions | I have fake versions of `transcribe_with_sarvam`, `speak_with_sarvam`, `retrieve_context`, and `ConversationMemory` that return hardcoded data. I can test my full pipeline without your code. |
-| Writing the GPT-4o system prompt | No dependency on you. Pure prompt engineering. |
-| Building the state machine + Neo4j graph | No dependency on you. Pure game logic. Neo4j stores session state (mood, stage, turn count, price history). |
-| Defining Pydantic models | I'll share the OpenAPI schema with you so you know exactly what the request/response looks like. |
-
-**When you're ready**, I swap the mocks for your real implementations via a config toggle (`USE_MOCKS=true/false`). Zero code changes in my orchestration logic.
+| Data | Created By | Consumed By | Format |
+|------|-----------|-------------|--------|
+| `audio_base64` (input) | Unity | Dev B (Step 2) | Base64 string |
+| `transcribed_text` | Dev B (Step 3) | Dev A (via arg) | Native script string |
+| `scene_context` | Unity | Dev A (via arg from Dev B) | Dict (see §2.2) |
+| `context_block` | Dev B (Step 5) | Dev A (via arg) | Multi-line text string |
+| `rag_context` | Dev B (Step 6) | Dev A (via arg) | Multi-line text string |
+| `reply_text` | Dev A (Step 7) | Dev B (Steps 8, 9, 11) | Native script string |
+| `new_mood / stage / price` | Dev A (Step 7, validated 7½) | Dev B (Steps 8, 11) | Dict fields |
+| `vendor_happiness / patience / mood` | Dev A (Step 7) | Dev B (Steps 8, 11) | Dict fields |
+| `audio_base64` (output) | Dev B (Step 10) | Unity (Step 11) | Base64 string |
 
 ---
 
-## 8. File Structure — Where Your Code Lives
+## 5. Error Flow — What Happens When Things Break
+
+```
+Step 1 fails (bad request body)  → Dev B returns 422 to Unity (Pydantic validation)
+Step 2 fails (bad base64)        → Dev B returns 400 to Unity immediately
+Step 3 fails (Sarvam STT down)   → Dev B returns 503 to Unity
+Step 3 returns "" (silence)      → Dev B skips Steps 4-7, vendor says "Kuch bola?"
+Step 6 fails (ChromaDB down)     → Dev B sets rag_context="" and calls Dev A (graceful)
+Step 7 fails (LLM error)         → Dev A raises BrainServiceError → Dev B returns 500
+Step 7 fails (Neo4j down)        → Dev A raises StateStoreError → Dev B returns 503
+Step 9 fails (Sarvam TTS down)   → Dev B sends text-only response (audio_base64="")
+No SARVAM_API_KEY set            → Dev B auto-mocks STT/TTS (Dev A unaffected)
+No OPENAI_API_KEY set            → Dev A fails at startup with clear error
+```
+
+---
+
+## 6. File Structure — Where Each Dev's Code Lives
 
 ```
 SamVadXR-Orchestration/
 │
-├── app/                          ◄── MY domain
-│   ├── main.py                   # API endpoint, orchestration
-│   ├── models/                   # Pydantic request/response models
+├── app/                          ◄── DEV A's domain
+│   ├── main.py                   # FastAPI dev server (testing only)
+│   ├── generate.py               # ★ PRIMARY INTERFACE — generate_vendor_response()
+│   ├── models/                   # Pydantic models (SceneContext, VendorResponse, AIDecision)
+│   │   ├── enums.py              # NegotiationStage, VendorMood, LanguageCode
+│   │   ├── request.py            # SceneContext model
+│   │   └── response.py           # VendorResponse model
 │   ├── services/
-│   │   ├── ai_brain.py           # GPT-4o prompt + parsing
+│   │   ├── ai_brain.py           # GPT-4o prompt composition + parsing
 │   │   ├── state_engine.py       # State machine validation (Neo4j-backed)
-│   │   ├── session_store.py      # Neo4j session state read/write
-│   │   └── mocks.py              # Mock versions of YOUR functions
+│   │   ├── session_store.py      # Neo4j session state (init_neo4j, close_neo4j, load, save)
+│   │   └── mocks.py              # Mock OpenAI + Neo4j for isolated testing
 │   ├── prompts/                  # System prompt templates
-│   └── config.py                 # Env vars, feature flags
+│   └── config.py                 # Env vars, settings
 │
-├── services/                     ◄── YOUR domain
+├── services/                     ◄── DEV B's domain
 │   ├── voice_ops.py              # transcribe_with_sarvam, speak_with_sarvam
 │   ├── rag_ops.py                # retrieve_context
 │   ├── context_memory.py         # ConversationMemory class
@@ -394,56 +308,55 @@ SamVadXR-Orchestration/
 │   └── exceptions.py            # SarvamServiceError, RAGServiceError
 │
 ├── tests/
-│   ├── test_voice_ops.py         ◄── You write these
-│   ├── test_rag_ops.py           ◄── You write these
-│   ├── test_api.py               ◄── I write these (uses mocks or real)
-│   └── test_integration.py       ◄── We write together
+│   ├── test_models.py            ◄── Dev A
+│   ├── test_ai_brain.py          ◄── Dev A
+│   ├── test_state_engine.py      ◄── Dev A
+│   ├── test_api.py               ◄── Dev A (dev endpoint tests)
+│   └── test_integration.py       ◄── Both (full pipeline test)
 │
 ├── requirements.txt
 └── .env.example
 ```
 
-You can develop your `services/` folder independently. I import from it.
+---
+
+## 7. Answered Questions (from v2.0 Integration Guide)
+
+These questions were open in v2.0. Per integration_response.md (v3.0), they are now resolved:
+
+| # | Question | Answer (v3.0) |
+|---|----------|---------------|
+| 1 | Are STT/TTS async? | Yes — `async def` (Dev B's concern now) |
+| 2 | Is `retrieve_context` async? | Yes — `async def` (Dev B's concern now) |
+| 3 | What does STT return on silence? | Empty string `""` → Dev B handles (skips Steps 4-7) |
+| 4 | What audio format does TTS return? | WAV 16-bit PCM, 22kHz, mono (Dev B's concern) |
+| 5 | What exception for STT failure? | `SarvamServiceError` (Dev B catches this themselves) |
+| 6 | What exception for TTS failure? | `SarvamServiceError` (Dev B sends text-only fallback) |
+| 7 | What exception for RAG failure? | `RAGServiceError` (Dev B sets rag_context="" and continues) |
+| 8 | Is `ConversationMemory` instance or singleton? | Instance per session (Dev B manages lifecycle) |
+| 9 | Language code format? | `hi-IN` style (Sarvam format) confirmed |
+| 10 | `get_context_block()` format? | Summary + recent dialogue as plain text string |
+| 11 | What does Dev A need from Dev B? | Nothing at runtime — Dev B calls us, not the other way around |
+| 12 | How does integration work? | Dev B imports `generate_vendor_response()` and calls it at Step 7 |
 
 ---
 
-## 9. The Handshake Checklist
-
-Before we integrate, let's confirm these decisions. Reply with your answers:
-
-| # | Decision | Options | Your Answer |
-|---|----------|---------|-------------|
-| 1 | Are `transcribe_with_sarvam` and `speak_with_sarvam` async? | `async def` / `def` | ? |
-| 2 | Is `retrieve_context` async? | `async def` / `def` | ? |
-| 3 | What HTTP client do you use for Sarvam? | `httpx` / `aiohttp` / `requests` | ? |
-| 4 | What does STT return on silence? | `""` / raises exception | ? |
-| 5 | What audio format does TTS return? | WAV PCM / MP3 / OGG | ? |
-| 6 | What sample rate for TTS audio? | 16kHz / 22kHz / 44.1kHz | ? |
-| 7 | Does `retrieve_context` return `str` or `list[str]`? | `str` / `list[str]` | ? |
-| 8 | Is `ConversationMemory` instance-based or singleton? | Instance per session / Singleton | ? |
-| 9 | What exceptions do you raise for service failures? | Custom class name(s) | ? |
-| 10 | Language code format confirmed? | `hi-IN` style | ? |
-| 11 | `get_context_block()` — how many turns included? | Last N turns (what N?) | ? |
-| 12 | Is ChromaDB in-process or a separate service? | In-process / External | ? |
-
----
-
-## 10. Timeline & Integration Points
+## 8. Timeline & Integration Points
 
 ```
 Week 1:
-  You: Build voice_ops.py (STT/TTS with Sarvam)
-  Me:  Build orchestration + AI brain + state engine (all mocked)
+  Dev A: Build generate_vendor_response() + AI brain + state engine (with mocks)
+  Dev B: Build voice_ops.py (STT/TTS) + endpoint + memory
   
-  ✅ Checkpoint: I send you a mock request/response JSON pair
-     so you can verify your functions produce compatible shapes.
+  ✅ Checkpoint: Dev A shares function contract (this document).
+     Dev B verifies they can produce the right arguments.
 
 Week 2:
-  You: Build rag_ops.py + context_memory.py
-  Me:  Finish prompt tuning + state machine testing
+  Dev A: Finish prompt tuning + Neo4j persistence + state machine testing
+  Dev B: Build rag_ops.py + context_memory.py + full pipeline
   
-  🤝 Integration Point: I import your modules, toggle USE_MOCKS=false
-     We test the full pipeline together with a real audio clip.
+  🤝 Integration Point: Dev B imports generate_vendor_response(),
+     calls it from their endpoint. We test together with real data.
 
 Week 2-3:
   Together: End-to-end testing, latency profiling, edge case handling.
@@ -452,32 +365,5 @@ Week 2-3:
 
 ---
 
-## Quick Reference — Function Signatures I'm Coding Against
-
-```python
-# middleware.py
-def base64_to_bytes(b64_string: str) -> bytes: ...
-def bytes_to_base64(audio_bytes: bytes) -> str: ...
-
-# voice_ops.py
-async def transcribe_with_sarvam(audio_bytes: bytes, language_code: str) -> str: ...
-async def speak_with_sarvam(text: str, language_code: str) -> bytes: ...
-
-# rag_ops.py
-async def retrieve_context(query: str, n_results: int = 3) -> str: ...
-
-# context_memory.py
-class ConversationMemory:
-    def add_turn(self, role: str, text: str, metadata: dict) -> None: ...
-    def get_context_block(self) -> str: ...
-
-# exceptions.py
-class SarvamServiceError(Exception): ...
-class RAGServiceError(Exception): ...
-```
-
-**These are the interfaces I'm mocking now and will swap for your real implementations later. If any signature doesn't work for you, let's discuss before either of us writes too much code.**
-
----
-
 *Last updated: 2026-02-13 — Developer A*
+*Architecture v3.0: Dev B owns the endpoint, Dev A provides generate_vendor_response()*

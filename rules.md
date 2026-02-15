@@ -9,40 +9,52 @@
 
 ### 1.1 Separation of Concerns
 
-- **Orchestration layer** (`app/`) NEVER contains Sarvam API calls, ChromaDB queries, or audio processing logic.
-- **Service layer** (`services/`) NEVER imports from `app/`. Data flows one direction: `app/` calls `services/`.
+- **App layer** (`app/`) is Dev A's domain — AI brain, state engine, Neo4j persistence, and the `generate_vendor_response()` function.
+- **Services layer** (`services/`) is Dev B's domain — STT, TTS, RAG, memory, middleware. Dev A does NOT modify these files.
 - **Models** (`app/models/`) contain ONLY Pydantic classes. No business logic. No imports from services.
 - **Prompts** (`app/prompts/`) contain ONLY string templates and prompt-building functions. No API calls.
 - **State persistence** (`app/services/session_store.py`) is the ONLY module that talks to Neo4j. No other module imports the Neo4j driver directly.
+- **Primary interface** (`app/generate.py`) exposes `generate_vendor_response()` — the one function Dev B calls.
 
-### 1.2 The Orchestration Function is Sacred
+### 1.2 The Primary Function is Sacred
 
-- `main.py` contains ONE primary endpoint: `POST /api/interact`
-- This endpoint follows EXACTLY this call order. No reordering without team approval:
+> **Architecture v3.0:** Dev B owns the API endpoint. Dev A provides `generate_vendor_response()`.
+
+- `app/generate.py` contains ONE primary function: `generate_vendor_response()`
+- This function handles **only Steps 7 + 7½** of the pipeline:
   ```
   Step  Owner   Action
   ────  ──────  ─────────────────────────────────────────────────
-   1    Dev A   Receive POST /api/interact, parse request
+   7    Dev A   Parse scene_context → Load Neo4j state → Compose prompt
+                → LLM call → Parse JSON → Validate AI decision
+   7½   Dev A   Clamp mood ±15, verify stage transition, persist to Neo4j
+  ```
+- The full pipeline (all 11 steps) is orchestrated by Dev B's endpoint:
+  ```
+  Step  Owner   Action
+  ────  ──────  ─────────────────────────────────────────────────
+   1    Dev B   Receive POST /api/interact, parse request
    2    Dev B   base64_to_bytes(request.audio_base64)
    3    Dev B   await transcribe_with_sarvam(bytes, lang)
    4    Dev B   memory.add_turn("user", text, metadata)
    5    Dev B   context_block = memory.get_context_block()
    6    Dev B   rag_ctx = await retrieve_context(text, 3)
-   7    Dev A   Compose prompt (context_block + rag_ctx + Neo4j state) → LLM → parse JSON
-   7½   Dev A   Validate via Neo4j: clamp mood ±15, verify stage transition
+   7    Dev A   generate_vendor_response(text, context_block, rag_ctx, scene, session)
+   7½   Dev A   (Internal) Validate via Neo4j: clamp mood ±15, verify stage
    8    Dev B   memory.add_turn("vendor", reply, metadata)
    9    Dev B   audio = await speak_with_sarvam(reply, lang)
   10    Dev B   b64 = bytes_to_base64(audio)
-  11    Dev A   Return InteractResponse to Unity
+  11    Dev B   Return InteractResponse to Unity
   ```
-- Every new step MUST be discussed before insertion into the pipeline.
+- Every new step inside `generate_vendor_response()` MUST be discussed before insertion.
 
 ### 1.3 Server is the Authority
 
-- Unity sends `current_mood` and `current_stage` with each request.
-- The server's returned `new_mood` and `new_stage` are **authoritative**.
+- Unity sends `vendor_happiness`, `vendor_patience`, and `negotiation_stage` via `scene_context` with each request.
+- The server's returned values (`new_mood`, `new_stage`, `vendor_happiness`, `vendor_patience`) are **authoritative**.
 - Unity MUST overwrite its local state with the server's response values.
 - If Unity and server disagree, server wins. Always.
+- Dev B forwards Unity's `scene_context` to Dev A's function unchanged. Dev A uses Neo4j as the authoritative source.
 
 ### 1.4 No Global Mutable State
 
@@ -89,7 +101,7 @@
 | Constants | `UPPER_SNAKE_CASE` | `MAX_MOOD_DELTA` |
 | Enums | `PascalCase` class, `UPPER_SNAKE_CASE` values | `NegotiationStage.HAGGLING` |
 | Env vars | `UPPER_SNAKE_CASE` | `OPENAI_API_KEY` |
-| Pydantic models | `PascalCase`, suffix with purpose | `InteractionRequest`, `InteractionResponse` |
+| Pydantic models | `PascalCase`, suffix with purpose | `SceneContext`, `VendorResponse`, `AIDecision` |
 
 ### 2.4 Import Order
 
@@ -123,24 +135,27 @@ from services.voice_ops import transcribe_with_sarvam
 
 ### 3.2 Model Changes Require Notification
 
-- Any change to `InteractionRequest` or `InteractionResponse` fields is a **breaking change**.
+- Any change to the `generate_vendor_response()` function signature or return schema is a **breaking change**.
 - Breaking changes require:
-  1. A message to the Unity developer.
-  2. A message to Developer B.
-  3. Updated OpenAPI schema shared to both.
-- Add new optional fields freely. Removing or renaming fields requires coordination.
+  1. A message to Developer B.
+  2. Updated function contract shared.
+- Add new optional return fields freely. Removing or renaming fields requires coordination.
+- Changes to `SceneContext` fields must be coordinated with Unity developer (via Dev B).
 
 ### 3.3 Enums are Closed
 
-- `NegotiationStage` and `LanguageCode` enums are finite. Adding a new value requires team discussion.
-- The AI Brain must NEVER produce a stage or language code that doesn't exist in the enum.
-- Pydantic validation will reject unknown enum values at the API boundary.
+- `NegotiationStage` (`GREETING`, `BROWSING`, `HAGGLING`, `DEAL`, `WALKAWAY`, `CLOSURE`) and `VendorMood` (`enthusiastic`, `neutral`, `annoyed`, `angry`) enums are finite. Adding a new value requires team discussion.
+- The AI Brain must NEVER produce a stage or mood value that doesn't exist in the enum.
+- Pydantic validation will reject unknown enum values.
 
 ### 3.4 Strict Numeric Bounds
 
 - `mood` is always `int`, range `[0, 100]`. Enforced by Pydantic validator AND state engine.
-- `price_offered` is always `Optional[int]`, non-negative when present.
+- `vendor_happiness` is always `int`, range `[0, 100]`. Enforced by state engine.
+- `vendor_patience` is always `int`, range `[0, 100]`. Enforced by state engine.
+- `price_offered` is always `int`, non-negative.
 - Mood delta per turn is capped at `±15`. The state engine enforces this even if the AI returns a larger delta.
+- `vendor_happiness` and `vendor_patience` deltas also capped at `±15` per turn.
 
 ---
 
@@ -191,64 +206,73 @@ from services.voice_ops import transcribe_with_sarvam
 ```
 GREETING   → BROWSING
 BROWSING   → HAGGLING
-BROWSING   → WALK_AWAY
+BROWSING   → WALKAWAY
 HAGGLING   → DEAL
-HAGGLING   → NO_DEAL
-HAGGLING   → WALK_AWAY
-WALK_AWAY  → HAGGLING      (only if mood > 40)
-WALK_AWAY  → NO_DEAL
+HAGGLING   → WALKAWAY
+HAGGLING   → CLOSURE
+WALKAWAY   → HAGGLING      (only if vendor_happiness > 40)
+WALKAWAY   → CLOSURE
 ```
 
-- **Everything else is illegal.** No shortcuts. No backward moves (except WALK_AWAY → HAGGLING).
+- **Updated stages (v3.0):** `GREETING`, `BROWSING`, `HAGGLING`, `DEAL`, `WALKAWAY`, `CLOSURE`
+- **Removed:** `WALK_AWAY` (now `WALKAWAY`), `NO_DEAL` (now `CLOSURE`)
+- **Everything else is illegal.** No shortcuts. No backward moves (except WALKAWAY → HAGGLING).
 - The transition graph is defined in ONE place: `app/services/state_engine.py`. No duplicate definitions.
 - State transitions are validated against the graph AND persisted to Neo4j in a single atomic operation.
 
 ### 5.2 Terminal States
 
-- `DEAL` and `NO_DEAL` are terminal. Once reached, no further interactions on that session.
+- `DEAL` and `CLOSURE` are terminal. Once reached, no further interactions on that session.
 - Hitting a terminal state MUST trigger a structured session summary log.
-- The API should return a flag or distinct stage value so Unity knows the scenario is over.
+- `generate_vendor_response()` should return a flag or distinct stage value so Dev B and Unity know the scenario is over.
 
 ### 5.3 Turn Limits
 
 - Maximum turns per session: **30**.
 - After turn 25, the AI prompt includes a wrap-up instruction ("start closing the negotiation").
-- After turn 30, force the state to `NO_DEAL` regardless of AI output.
+- After turn 30, force the state to `CLOSURE` regardless of AI output.
 
 ---
 
 ## 6. Error Handling Rules
 
-### 6.1 No Raw Exceptions to Unity
+### 6.1 No Raw Exceptions to Dev B or Unity
 
-- Every response to Unity is either a valid `InteractionResponse` or a valid `ErrorResponse`.
-- HTTP 500 with a stack trace is **forbidden** in production.
-- Use FastAPI exception handlers to catch all unhandled exceptions and convert to `ErrorResponse`.
+- `generate_vendor_response()` either returns a valid `VendorResponse` dict or raises a documented exception.
+- Valid exceptions: `BrainServiceError` (LLM failed), `StateStoreError` (Neo4j down).
+- Dev B catches these and returns appropriate HTTP errors to Unity.
+- Unhandled exceptions MUST NOT leak from `generate_vendor_response()`.
 
 ### 6.2 Graceful Degradation Hierarchy
 
-| Failed Service | Fallback Behavior | HTTP Status |
-|---------------|-------------------|-------------|
-| STT (Sarvam) | Return 503 with "Speech recognition unavailable" | 503 |
-| RAG (ChromaDB) | Continue without cultural context. AI still responds. | 200 |
-| AI Brain (OpenAI) | Return in-character fallback: "Ek minute bhai..." | 200 (with fallback flag) |
-| TTS (Sarvam) | Return text-only response. `audio_base64` = empty string. | 200 |
-| Neo4j | Return 503 with "Game state unavailable" — cannot proceed without authoritative state | 503 |
+> **Note:** Dev B handles the HTTP response codes. Dev A's function either succeeds or raises exceptions.
 
-- RAG and TTS failures are **soft failures** — the pipeline continues.
-- STT and Neo4j failures are **hard failures** — no user text or no game state means no meaningful response.
-- AI failure triggers a fallback, NOT a 500.
+| Failed Component | Dev A's Behavior | Dev B Maps To |
+|-----------------|------------------|---------------|
+| STT (Sarvam) | N/A (Dev B's responsibility) | 503 |
+| RAG (ChromaDB) | `rag_context=""` is fine — function works without it | 200 |
+| AI Brain (OpenAI) | Retry once → raise `BrainServiceError` | 500 |
+| TTS (Sarvam) | N/A (Dev B's responsibility) | 200 (text-only) |
+| Neo4j | Raise `StateStoreError` | 503 |
+
+- RAG being empty is a **soft failure** — `generate_vendor_response()` works fine without it.
+- Neo4j failure is a **hard failure** — cannot proceed without authoritative state.
+- AI failure triggers retry + fallback; only raises exception after retries exhausted.
 
 ### 6.3 Timeouts Are Hard Limits
 
-| Service | Timeout |
-|---------|---------|
-| STT | 5 seconds |
-| RAG | 3 seconds |
-| AI Brain (OpenAI) | 10 seconds |
-| TTS | 5 seconds || Neo4j (per query) | 2 seconds || Total request | 20 seconds |
+| Component | Timeout | Owner |
+|-----------|---------|-------|
+| STT | 5 seconds | Dev B |
+| RAG | 3 seconds | Dev B |
+| AI Brain (OpenAI) | 10 seconds | Dev A |
+| TTS | 5 seconds | Dev B |
+| Neo4j (per query) | 2 seconds | Dev A |
+| `generate_vendor_response()` total | ~3 seconds | Dev A |
+| Full pipeline (Dev B's endpoint) | 20 seconds | Dev B |
 
-- If a service exceeds its timeout, treat it as if that service is down. Apply the degradation rules above.
+- Dev A enforces timeouts on OpenAI and Neo4j within `generate_vendor_response()`.
+- Dev B enforces timeouts on STT, TTS, RAG, and the overall request budget.
 - Timeouts are configured via env vars, not hardcoded.
 
 ### 6.4 Retry Policy
@@ -312,32 +336,27 @@ WALK_AWAY  → NO_DEAL
 
 ### 8.2 Required Environment Variables
 
+> **Dev A's variables only.** Dev B has their own set (`SARVAM_API_KEY`, etc.)
+
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `OPENAI_API_KEY` | Yes | — | OpenAI API key |
 | `OPENAI_MODEL` | No | `gpt-4o` | Model to use for AI Brain |
-| `SARVAM_API_KEY` | Yes | — | Sarvam AI API key |
-| `USE_MOCKS` | No | `false` | Toggle all mocks |
-| `USE_MOCK_STT` | No | `false` | Toggle mock STT only |
-| `USE_MOCK_TTS` | No | `false` | Toggle mock TTS only |
-| `USE_MOCK_RAG` | No | `false` | Toggle mock RAG only |
-| `LOG_LEVEL` | No | `INFO` | Logging level |
-| `STT_TIMEOUT_MS` | No | `5000` | STT timeout |
-| `TTS_TIMEOUT_MS` | No | `5000` | TTS timeout |
-| `RAG_TIMEOUT_MS` | No | `3000` | RAG timeout |
-| `AI_TIMEOUT_MS` | No | `10000` | AI Brain timeout |
-| `MAX_TURNS` | No | `30` | Max turns per session |
-| `MAX_MOOD_DELTA` | No | `15` | Max mood change per turn |
-| `NEO4J_URI` | Yes | — | Neo4j connection URI (e.g., `bolt://localhost:7687`) |
+| `NEO4J_URI` | No | `bolt://localhost:7687` | Neo4j connection URI |
 | `NEO4J_USER` | No | `neo4j` | Neo4j username |
 | `NEO4J_PASSWORD` | Yes | — | Neo4j password |
 | `NEO4J_TIMEOUT_MS` | No | `2000` | Per-query Neo4j timeout |
+| `USE_MOCKS` | No | `false` | Toggle mock OpenAI + Neo4j (for Dev A's isolated testing) |
+| `LOG_LEVEL` | No | `INFO` | Logging level |
+| `AI_TIMEOUT_MS` | No | `10000` | AI Brain timeout |
+| `MAX_TURNS` | No | `30` | Max turns per session |
+| `MAX_MOOD_DELTA` | No | `15` | Max mood change per turn |
 
 ### 8.3 Feature Flags
 
-- `USE_MOCKS=true` overrides all individual mock flags.
-- Individual flags (`USE_MOCK_STT`, etc.) allow partial integration during development.
-- In production, ALL mock flags MUST be `false`. The startup check should warn if any mock is enabled and `LOG_LEVEL` is not `DEBUG`.
+- `USE_MOCKS=true` mocks Dev A's own dependencies (OpenAI, Neo4j) for isolated testing.
+- **Removed from Dev A's scope:** `USE_MOCK_STT`, `USE_MOCK_TTS`, `USE_MOCK_RAG`, `SARVAM_API_KEY`, `STT_TIMEOUT_MS`, `TTS_TIMEOUT_MS`, `RAG_TIMEOUT_MS` — all belong to Dev B.
+- In production, `USE_MOCKS` MUST be `false`. The startup check should warn if mocks are enabled.
 
 ---
 
@@ -454,26 +473,25 @@ Before approving any PR, verify:
 
 ### 12.1 Target Latencies
 
-| Pipeline Step | Target | Hard Limit |
-|--------------|--------|------------|
-| Request parsing + validation | < 5ms | 50ms |
-| STT (Sarvam) | ~800ms | 5000ms |
-| Memory operations | < 5ms | 50ms |
-| RAG retrieval | ~50ms | 3000ms |
-| AI Brain (GPT-4o) | ~2000ms | 10000ms |
-| State validation (Neo4j) | ~20ms | 2000ms |
-| TTS (Sarvam) | ~600ms | 5000ms |
-| Response assembly | < 5ms | 50ms |
-| **Total** | **~3.5s** | **20s** |
+> **Dev A's component only.** Dev B's full pipeline has its own budget (~3.5s total).
+
+| Component | Target | Hard Limit | Owner |
+|-----------|--------|------------|-------|
+| Scene context parsing + validation | < 5ms | 50ms | Dev A |
+| Neo4j state load | ~20ms | 2000ms | Dev A |
+| AI Brain (GPT-4o) | ~2000ms | 10000ms | Dev A |
+| State validation + clamp | < 5ms | 50ms | Dev A |
+| Neo4j state persist | ~20ms | 2000ms | Dev A |
+| Response assembly | < 5ms | 50ms | Dev A |
+| **`generate_vendor_response()` total** | **~2.1s** | **~12s** | **Dev A** |
 
 ### 12.2 Optimization Priorities
 
-If total latency exceeds 5 seconds consistently:
-1. Profile each step. Identify which service is the bottleneck.
+If `generate_vendor_response()` latency exceeds 3 seconds consistently:
+1. Profile each internal step. Identify which component is the bottleneck.
 2. Reduce GPT-4o `max_tokens` or prompt length.
-3. Consider caching common RAG queries.
-4. Consider STT/RAG parallelization if pipeline allows (currently sequential due to dependency).
-5. Do NOT sacrifice correctness for speed. A correct 5s response beats a wrong 2s response.
+3. Consider caching Neo4j session state in memory between calls.
+4. Do NOT sacrifice correctness for speed. A correct 3s response beats a wrong 1s response.
 
 ---
 
@@ -493,3 +511,5 @@ A task is complete when:
 ---
 
 *This document is enforced, not aspirational. If a rule doesn't make sense, change it through a PR — don't ignore it.*
+
+*Architecture v3.0 — Feb 13, 2026: Updated for new architecture where Dev B owns the endpoint and Dev A provides `generate_vendor_response()`.*
