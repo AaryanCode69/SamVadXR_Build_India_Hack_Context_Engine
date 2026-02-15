@@ -17,6 +17,9 @@ from app.config import get_settings
 from app.services.mocks import MockLLMService, MockSessionStore
 from app.services.protocols import LLMService, SessionStore
 
+# Lazy import to avoid loading OpenAI SDK when mocks are active
+# from app.services.ai_brain import OpenAILLMService  # imported in get_llm_service()
+
 logger = logging.getLogger("samvadxr")
 
 # ── Module-level singletons (initialized on first access) ──
@@ -40,12 +43,13 @@ def get_llm_service() -> LLMService:
             )
             _llm_service = MockLLMService()
         else:
-            # Phase 4 will provide RealLLMService here.
-            # For now, raise so we don't silently fail.
-            raise NotImplementedError(
-                "RealLLMService not implemented yet (Phase 4). "
-                "Set USE_MOCKS=true for development."
+            from app.services.ai_brain import OpenAILLMService
+
+            logger.info(
+                "DI: Using OpenAILLMService (real OpenAI)",
+                extra={"step": "dependency_init"},
             )
+            _llm_service = OpenAILLMService()
     return _llm_service
 
 

@@ -56,10 +56,18 @@ class MockLLMService:
         text_lower = user_message.lower()
 
         # When called via generate_vendor_response(), the user_message is a
-        # composed prompt like "User says: <speech>\nContext: ...\nScene: ...".
+        # composed prompt with delimited sections like:
+        #   --- USER MESSAGE ---
+        #   <speech>
+        #   --- END USER MESSAGE ---
         # Extract only the user's speech for keyword matching to avoid false
         # positives from context/scene fields (e.g. "price=0" triggering HAGGLING).
-        if "user says:" in text_lower:
+        if "--- user message ---" in text_lower:
+            # New Phase 4 format: delimited sections
+            after_marker = text_lower.split("--- user message ---", 1)[1]
+            speech = after_marker.split("--- end user message ---", 1)[0].strip()
+        elif "user says:" in text_lower:
+            # Legacy Phase 2-3 format: "User says: <speech>\nContext: ..."
             speech = text_lower.split("user says:", 1)[1].split("\n", 1)[0].strip()
         else:
             speech = text_lower

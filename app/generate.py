@@ -37,6 +37,11 @@ from app.models.enums import (
 )
 from app.models.request import SceneContext
 from app.models.response import VendorResponse
+from app.prompts.vendor_system import (
+    PROMPT_VERSION,
+    build_system_prompt,
+    build_user_message,
+)
 
 logger = logging.getLogger("samvadxr")
 
@@ -227,29 +232,48 @@ async def generate_vendor_response(
     # ── 3. Compose prompt & call LLM ─────────────────────
     t0 = time.monotonic()
 
-    # Phase 4 will build the real prompt composition (God Prompt).
-    # For now, pass a minimal system prompt + user message.
-    system_prompt = (
-        "You are a street vendor in an Indian bazaar. "
-        "Respond in character as a friendly but shrewd vendor."
+    # Use authoritative state from session store, fall back to scene for first turn
+    effective_happiness = session_state.get(
+        "vendor_happiness", parsed_scene.vendor_happiness
+    )
+    effective_patience = session_state.get(
+        "vendor_patience", parsed_scene.vendor_patience
+    )
+    effective_stage = session_state.get(
+        "negotiation_stage", parsed_scene.negotiation_stage.value
+    )
+    effective_price = session_state.get(
+        "current_price", parsed_scene.current_price
     )
 
-    wrap_up_hint = ""
-    if turn_count >= WRAP_UP_TURN_THRESHOLD:
-        wrap_up_hint = (
-            "\n[SYSTEM NOTE: This negotiation is nearing its end. "
-            "Start wrapping up and guide towards a conclusion.]"
-        )
+    system_prompt = build_system_prompt(
+        vendor_happiness=effective_happiness,
+        vendor_patience=effective_patience,
+        negotiation_stage=effective_stage,
+        current_price=effective_price,
+        user_offer=parsed_scene.user_offer,
+        turn_count=turn_count,
+        items_in_hand=parsed_scene.items_in_hand,
+        looking_at=parsed_scene.looking_at,
+        distance_to_vendor=parsed_scene.distance_to_vendor,
+        wrap_up=turn_count >= WRAP_UP_TURN_THRESHOLD,
+    )
 
-    user_message = (
-        f"User says: {transcribed_text}\n"
-        f"Context: {context_block}\n"
-        f"Cultural info: {rag_context}\n"
-        f"Scene: stage={parsed_scene.negotiation_stage.value}, "
-        f"happiness={parsed_scene.vendor_happiness}, "
-        f"patience={parsed_scene.vendor_patience}, "
-        f"price={parsed_scene.current_price}"
-        f"{wrap_up_hint}"
+    user_message = build_user_message(
+        transcribed_text=transcribed_text,
+        context_block=context_block,
+        rag_context=rag_context,
+    )
+
+    logger.debug(
+        "Prompt composed",
+        extra={
+            "step": "prompt_compose",
+            "request_id": request_id,
+            "prompt_version": PROMPT_VERSION,
+            "system_prompt_length": len(system_prompt),
+            "user_message_length": len(user_message),
+        },
     )
 
     try:

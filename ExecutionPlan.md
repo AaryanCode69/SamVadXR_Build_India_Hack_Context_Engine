@@ -448,7 +448,7 @@ Every boundary — incoming arguments, AI output, state transition — gets vali
 
 ### Tasks
 
-- [ ] **4.1 — System Prompt Engineering ("The God Prompt")**
+- [x] **4.1 — System Prompt Engineering ("The God Prompt")**
   - This is the single most important piece of text in the entire project. Dedicate real time to it.
   - The system prompt must establish:
     - **Persona**: Name, personality, backstory. E.g., "You are Ramesh, a 55-year-old brass goods vendor in Jaipur's Johari Bazaar. You've been haggling since age 12. You are shrewd but fair."
@@ -477,13 +477,13 @@ Every boundary — incoming arguments, AI output, state transition — gets vali
       - "You MUST respond with a JSON object matching the provided schema. No markdown. No explanation outside the JSON."
       - Schema now includes: `reply_text`, `new_mood`, `new_stage`, `price_offered`, `vendor_happiness`, `vendor_patience`, `vendor_mood`, `internal_reasoning`
 
-- [ ] **4.2 — Prompt Template System**
+- [x] **4.2 — Prompt Template System**
   - Build the prompt as a composable template, not a hardcoded string
   - Sections that change per request: `user_text`, `rag_context`, `held_item`, `looked_at_item`, `current_mood`, `current_stage`
   - Sections that are static: persona, behavioral rules, output schema
   - This allows A/B testing different vendor personalities later
 
-- [ ] **4.3 — OpenAI API Integration**
+- [x] **4.3 — OpenAI API Integration**
   - Use the OpenAI Python SDK's `chat.completions.create()`
   - Set `response_format={"type": "json_object"}` to enforce JSON mode
   - Use `temperature=0.7` for personality variation while maintaining coherence
@@ -491,7 +491,7 @@ Every boundary — incoming arguments, AI output, state transition — gets vali
   - Include the JSON schema of `AIDecision` in the system prompt so GPT-4o knows the exact structure to produce
   - **New fields in schema:** `vendor_happiness`, `vendor_patience`, `vendor_mood` (in addition to existing `reply_text`, `new_mood`, `new_stage`, `price_offered`)
 
-- [ ] **4.4 — Response Parsing & Validation**
+- [x] **4.4 — Response Parsing & Validation**
   - Parse GPT-4o's response as JSON
   - Validate against the `AIDecision` Pydantic model
   - If parsing fails (malformed JSON): retry once with a simplified prompt, then fall back to a default safe response ("Haan ji, ek minute..." / "Yes, one moment...")
@@ -500,12 +500,12 @@ Every boundary — incoming arguments, AI output, state transition — gets vali
   - If `vendor_mood` not in allowed values: default to `"neutral"`
   - If stage transition is illegal: keep the current stage and log a warning
 
-- [ ] **4.5 — Retry & Fallback Strategy**
+- [x] **4.5 — Retry & Fallback Strategy**
   - On OpenAI API timeout or rate limit (429): retry with exponential backoff (max 2 retries)
   - On persistent failure: return a "vendor is distracted" in-character fallback response so the VR experience doesn't break
   - Never surface raw API errors to Unity
 
-- [ ] **4.6 — Prompt Versioning & Logging**
+- [x] **4.6 — Prompt Versioning & Logging**
   - Log every prompt sent to GPT-4o and every response received (at DEBUG level)
   - Include a `prompt_version` field in logs so you can correlate behavior changes with prompt edits
   - Store prompt history (even if just in git) so you can roll back

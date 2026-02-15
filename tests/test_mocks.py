@@ -300,14 +300,16 @@ class TestDependencyInjection:
         llm2 = get_llm_service()
         assert llm1 is not llm2  # new instance after reset
 
-    def test_use_mocks_false_raises_not_implemented(
+    def test_use_mocks_false_creates_real_llm_service(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """USE_MOCKS=false should raise until Phase 4-5 provide real services."""
+        """USE_MOCKS=false should create OpenAILLMService (Phase 4 implemented)."""
         reset_services()
         monkeypatch.setenv("USE_MOCKS", "false")
-        with pytest.raises(NotImplementedError, match="RealLLMService"):
-            get_llm_service()
+        from app.services.ai_brain import OpenAILLMService
+
+        service = get_llm_service()
+        assert isinstance(service, OpenAILLMService)
 
     def test_use_mocks_false_store_raises_not_implemented(
         self, monkeypatch: pytest.MonkeyPatch

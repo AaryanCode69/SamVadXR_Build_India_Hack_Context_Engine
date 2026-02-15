@@ -409,7 +409,7 @@ class TestWrapUpHint:
         self.store = mock_store
 
     async def test_wrap_up_hint_at_turn_25(self) -> None:
-        """At turn 25, a wrap-up system note is injected into the prompt."""
+        """At turn 25, the WRAP-UP INSTRUCTION is injected into the system prompt."""
         await self.store.create_session("wrap-up")
         state = await self.store.load_session("wrap-up")
         assert state is not None
@@ -417,12 +417,12 @@ class TestWrapUpHint:
         state["negotiation_stage"] = "HAGGLING"
         await self.store.save_session("wrap-up", state)
 
-        # Capture the prompt sent to LLM
+        # Capture the system prompt sent to LLM
         captured_prompts: list[str] = []
         original_generate = self.llm.generate_decision
 
         async def spy_generate(system_prompt: str, user_message: str, **kw):  # type: ignore[no-untyped-def]
-            captured_prompts.append(user_message)
+            captured_prompts.append(system_prompt)
             return await original_generate(system_prompt, user_message, **kw)
 
         self.llm.generate_decision = spy_generate  # type: ignore[method-assign]
@@ -435,10 +435,10 @@ class TestWrapUpHint:
             session_id="wrap-up",
         )
         assert len(captured_prompts) == 1
-        assert "wrapping up" in captured_prompts[0].lower()
+        assert "wrap-up instruction" in captured_prompts[0].lower()
 
     async def test_no_wrap_up_hint_at_turn_10(self) -> None:
-        """At turn 10, no wrap-up hint is injected."""
+        """At turn 10, no wrap-up instruction is injected."""
         await self.store.create_session("no-wrap")
         state = await self.store.load_session("no-wrap")
         assert state is not None
@@ -450,7 +450,7 @@ class TestWrapUpHint:
         original_generate = self.llm.generate_decision
 
         async def spy_generate(system_prompt: str, user_message: str, **kw):  # type: ignore[no-untyped-def]
-            captured_prompts.append(user_message)
+            captured_prompts.append(system_prompt)
             return await original_generate(system_prompt, user_message, **kw)
 
         self.llm.generate_decision = spy_generate  # type: ignore[method-assign]
@@ -463,7 +463,7 @@ class TestWrapUpHint:
             session_id="no-wrap",
         )
         assert len(captured_prompts) == 1
-        assert "wrapping up" not in captured_prompts[0].lower()
+        assert "wrap-up instruction" not in captured_prompts[0].lower()
 
 
 # ═══════════════════════════════════════════════════════════
