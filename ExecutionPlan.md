@@ -393,7 +393,7 @@ Every boundary — incoming arguments, AI output, state transition — gets vali
 
 ### Tasks
 
-- [ ] **3.1 — Primary Function: `generate_vendor_response()`**
+- [x] **3.1 — Primary Function: `generate_vendor_response()`**
   - Create `app/generate.py` with the function signature matching the integration contract:
     ```python
     async def generate_vendor_response(
@@ -414,21 +414,21 @@ Every boundary — incoming arguments, AI output, state transition — gets vali
   - Include request correlation logging (generate internal `request_id`)
   - Log: AI started → AI done → state validated → state persisted → response returned
 
-- [ ] **3.2 — Dev Test Endpoint (Optional)**
+- [x] **3.2 — Dev Test Endpoint (Optional)**
   - `POST /api/dev/generate` — wraps `generate_vendor_response()` in an HTTP endpoint
   - Accepts the same arguments as the function in a JSON body
   - Useful for testing with curl/Postman without Dev B's pipeline
   - **Not for production use** — Dev B calls the function directly via import
   - Protected with a simple flag: only available when `LOG_LEVEL=DEBUG`
 
-- [ ] **3.3 — Error Handling**
+- [x] **3.3 — Error Handling**
   - `generate_vendor_response()` handles errors internally and either:
     - Returns a valid response (with fallback vendor reply), or
     - Raises `BrainServiceError` (LLM failed after retries) or `StateStoreError` (Neo4j down)
   - Dev B catches these exceptions and maps them to HTTP errors for Unity
   - RAG context being empty is **not an error** — the function works fine without it
 
-- [ ] **3.4 — Logging & Timing**
+- [x] **3.4 — Logging & Timing**
   - Log each internal step with timing (milliseconds)
   - Include `session_id` and generated `request_id` in all log lines
   - Total latency budget for `generate_vendor_response()`: ~2-3 seconds (LLM is the bottleneck)

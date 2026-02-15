@@ -13,14 +13,16 @@ which Dev B imports and calls from their endpoint handler.
 import logging
 import sys
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
+from typing import Any, AsyncGenerator, Optional
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from neo4j import AsyncGraphDatabase
+from pydantic import BaseModel, Field
 
 from app.config import Settings, get_settings
+from app.exceptions import BrainServiceError, StateStoreError
 from app.logging_config import setup_logging
 
 # ---------------------------------------------------------------------------
@@ -146,26 +148,82 @@ def create_app() -> FastAPI:
             "version": settings.app_version,
         }
 
-    # ── Dev test endpoint (placeholder — built in Phase 3) ───
+    # ── Dev test endpoint ───────────────────────────────
     # POST /api/dev/generate wraps generate_vendor_response()
     # for isolated curl/Postman testing. Not for production use.
-    @app.post("/api/dev/generate", tags=["dev"])
-    async def dev_generate(payload: dict) -> dict:
-        """Dev-only endpoint to test generate_vendor_response() directly.
+    # Only available when LOG_LEVEL=DEBUG.
 
-        Expects JSON with: transcribed_text, context_block, rag_context,
-        scene_context (dict), session_id.
-        """
-        from app.generate import generate_vendor_response
+    if settings.log_level.upper() == "DEBUG":
 
-        result = await generate_vendor_response(
-            transcribed_text=payload.get("transcribed_text", ""),
-            context_block=payload.get("context_block", ""),
-            rag_context=payload.get("rag_context", ""),
-            scene_context=payload.get("scene_context", {}),
-            session_id=payload.get("session_id", "dev-test"),
-        )
-        return result
+        class DevGenerateRequest(BaseModel):
+            """Request body for the dev test endpoint."""
+
+            transcribed_text: str = Field(
+                default="",
+                description="What the user said (from STT).",
+            )
+            context_block: str = Field(
+                default="",
+                description="Formatted conversation history.",
+            )
+            rag_context: str = Field(
+                default="",
+                description="Cultural/item knowledge from RAG.",
+            )
+            scene_context: dict[str, Any] = Field(
+                default_factory=lambda: {
+                    "items_in_hand": [],
+                    "looking_at": None,
+                    "distance_to_vendor": 1.0,
+                    "vendor_npc_id": "vendor_01",
+                    "vendor_happiness": 50,
+                    "vendor_patience": 70,
+                    "negotiation_stage": "BROWSING",
+                    "current_price": 0,
+                    "user_offer": 0,
+                },
+                description="Game state from Unity.",
+            )
+            session_id: str = Field(
+                default="dev-test",
+                description="Unique session identifier.",
+            )
+
+        @app.post("/api/dev/generate", tags=["dev"])
+        async def dev_generate(payload: DevGenerateRequest) -> dict:
+            """Dev-only endpoint to test generate_vendor_response() directly.
+
+            Only available when LOG_LEVEL=DEBUG.
+            Returns the validated VendorResponse dict, or an error JSON
+            with the appropriate HTTP status code.
+            """
+            from app.generate import generate_vendor_response
+
+            try:
+                result = await generate_vendor_response(
+                    transcribed_text=payload.transcribed_text,
+                    context_block=payload.context_block,
+                    rag_context=payload.rag_context,
+                    scene_context=payload.scene_context,
+                    session_id=payload.session_id,
+                )
+                return result
+            except BrainServiceError as exc:
+                return JSONResponse(
+                    status_code=500,
+                    content={
+                        "error_code": "BRAIN_SERVICE_ERROR",
+                        "message": str(exc),
+                    },
+                )
+            except StateStoreError as exc:
+                return JSONResponse(
+                    status_code=503,
+                    content={
+                        "error_code": "STATE_STORE_ERROR",
+                        "message": str(exc),
+                    },
+                )
 
     return app
 
